@@ -3,9 +3,6 @@
   "version": "1.0.0",
   "private": true,
   "description": "Cricket Prediction Community Platform \u2014 cyberpunk-themed Next.js 15 application with Google authentication, referral system and gated Android APK distribution.",
-  "engines": {
-    "node": ">=18.18.0"
-  },
   "scripts": {
     "dev": "next dev",
     "build": "prisma generate && next build",
@@ -29,9 +26,6 @@
     "db:seed": "tsx prisma/seed.ts",
     "db:reset": "prisma migrate reset --force",
     "apk:placeholder": "node scripts/make-placeholder-apk.mjs"
-  },
-  "prisma": {
-    "seed": "tsx prisma/seed.ts"
   },
   "dependencies": {
     "@prisma/client": "6.19.3",
@@ -65,11 +59,21 @@
     "dotenv": "16.6.1",
     "eslint": "8.57.1",
     "eslint-config-next": "15.5.27",
-    "postcss": "8.5.6",
+    "postcss": "^8.5.23",
     "prisma": "6.19.3",
     "tailwindcss": "3.4.19",
     "tsx": "4.20.6",
     "typescript": "5.9.3",
-    "vitest": "3.2.4"
+    "vitest": "3.2.6"
+  },
+  "overrides": {
+    "postcss": "$postcss",
+    "deepmerge-ts": "^8.0.0"
+  },
+  "engines": {
+    "node": ">=18.18.0"
+  },
+  "prisma": {
+    "seed": "tsx prisma/seed.ts"
   }
 }
