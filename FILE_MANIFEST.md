@@ -204,7 +204,7 @@ Legend: 🎨 UI · ⚙️ logic · 🔒 security-relevant · 📄 docs/config
 | 📄 `FILE_MANIFEST.md` | This file. |
 | 📄 `storage/apk/README.md` | Explains the private staging directory, why it is preferred over `public/`, and the `release.json` label format. |
 | 📄 `storage/apk/release.example.json` | Template for the optional build label. Only descriptive fields are read from it — size, SHA-256 and date are always measured from the APK itself. |
-| 📄 `docs/screenshots/*.png` | 21 captures taken from the running application: landing sections, auth, the guest gate, the unlocked Download Center, dashboard, the SSO fire handshake in three stages (early / full log / ACCESS GRANTED), the arrival burst, and mobile widths. |
+| 📄 `docs/screenshots/*.png` | 22 captures taken from the running application: landing sections, auth, the guest gate, the unlocked Download Center, dashboard, the SSO fire handshake in three stages (early / full log / ACCESS GRANTED), the arrival burst, and mobile widths. |
 
 ---
 
