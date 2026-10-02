@@ -102,8 +102,6 @@ Add these in the Vercel *Environment Variables* panel. Tick **Production**,
 | `NEXTAUTH_SECRET` | The `openssl rand -base64 32` output | **Yes** |
 | `NEXTAUTH_URL` | `https://<your-app>.vercel.app` | **Yes** |
 | `NEXT_PUBLIC_SITE_URL` | same value as `NEXTAUTH_URL` | **Yes** |
-| `NEXT_PUBLIC_ENABLE_DEMO_LOGIN` | `false` | **Yes — read the warning below** |
-| `DEMO_LOGIN_PASSWORD` | any string | No |
 | `GOOGLE_CLIENT_ID` | from Google Cloud Console | See Step 6 |
 | `GOOGLE_CLIENT_SECRET` | from Google Cloud Console | See Step 6 |
 | `APK_FILE_NAME` | `app-release.apk` | No |
@@ -118,18 +116,20 @@ Do **not** set `SHADOW_DATABASE_URL`. That variable is only used by
 `NEXTAUTH_URL` must match the deployed origin **exactly** — `https://`, no
 trailing slash. If it is wrong, sign-in fails with a redirect or CSRF error.
 
-### 🚨 Keep `NEXT_PUBLIC_ENABLE_DEMO_LOGIN` set to `false`
+### ⚠️ Google credentials are not optional
 
-The app ships with a **Developer Access** channel: a passwordless-style
-credentials login intended for local testing before Google OAuth credentials
-exist. On a public URL, leaving it enabled means **anyone who loads `/login`
-can click through and provision an account**, which then unlocks `/dashboard`
-and the gated `/download` route.
+This build is **Google-only**. The email/password developer channel that used to
+allow testing before OAuth existed has been removed, so `GOOGLE_CLIENT_ID` and
+`GOOGLE_CLIENT_SECRET` are the only way in.
 
-`.env.example` already defaults it to `false` and the source comments mark it
-`!! MUST be "false" in production. !!` — keep it that way.
+If you deploy before configuring them:
 
----
+- `/login` and `/register` render a **"No sign-in method is configured"** panel.
+- Nobody — including you — can create an account or reach `/dashboard`.
+
+That is the intended failure mode: it is loud and safe, rather than silently
+leaving a bypass channel open on a public URL. Complete Step 6 before sharing
+the link.
 
 ## Step 5 — Deploy
 
@@ -159,14 +159,8 @@ safe — it refreshes rows in place rather than duplicating them.
 
 ## Step 6 — Make real Google logins work
 
-Until you complete this step, **nobody can sign in** — because demo login is
-disabled and no Google credentials exist yet. Pick one:
-
-- **Option A (recommended):** finish this step now.
-- **Option B (temporary):** set `NEXT_PUBLIC_ENABLE_DEMO_LOGIN` to `true`,
-  redeploy, test everything, then **set it back to `false` and redeploy**.
-
-To configure Google OAuth:
+Until you complete this step **nobody can sign in** — Google is the only
+provider registered. To configure it:
 
 1. Open **https://console.cloud.google.com/apis/credentials**
 2. If prompted, create a project (e.g. `cricket-platform`).

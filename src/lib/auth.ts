@@ -1,15 +1,12 @@
 import type { NextAuthOptions } from "next-auth";
 import { cookies } from "next/headers";
 import GoogleProvider from "next-auth/providers/google";
-import CredentialsProvider from "next-auth/providers/credentials";
 import { prisma } from "@/lib/prisma";
 import { provisionUser, normalizeEmail } from "@/lib/user";
 
 /** Cookie that carries a referral code across the OAuth round-trip. */
 export const REFERRAL_COOKIE = "cpc_ref";
 export const REFERRAL_COOKIE_MAX_AGE = 60 * 60 * 24 * 30; // 30 days
-
-const DEMO_LOGIN_ENABLED = process.env.NEXT_PUBLIC_ENABLE_DEMO_LOGIN === "true";
 
 /* ==========================================================================
    HELPERS
@@ -42,17 +39,6 @@ async function clearReferralCookie(): Promise<void> {
   }
 }
 
-/**
- * Deterministic, namespaced pseudo-identifier for developer sign-in.
- * Prefixed so it can never collide with a real Google `sub` claim.
- */
-function demoGoogleId(email: string): string {
-  const digest = Buffer.from(normalizeEmail(email))
-    .toString("base64url")
-    .slice(0, 40);
-  return `demo_${digest}`;
-}
-
 /* ==========================================================================
    PROVIDERS
    ========================================================================== */
@@ -81,49 +67,6 @@ const providers: NextAuthOptions["providers"] = [
     },
   }),
 ];
-
-/**
- * Developer access channel.
- *
- * Enabled only when `NEXT_PUBLIC_ENABLE_DEMO_LOGIN === "true"`. It authenticates
- * through the *identical* NextAuth pipeline as Google — the same `signIn`
- * callback provisions a real PostgreSQL row with a real referral code — so the
- * register → dashboard → download journey is verifiable before Google OAuth
- * credentials are provisioned. Disabled by default in production.
- */
-if (DEMO_LOGIN_ENABLED) {
-  providers.push(
-    CredentialsProvider({
-      id: "developer",
-      name: "Developer Access",
-      credentials: {
-        email: { label: "Email", type: "email" },
-        name: { label: "Name", type: "text" },
-        passphrase: { label: "Access Passphrase", type: "password" },
-      },
-      async authorize(credentials) {
-        if (!credentials?.email) return null;
-
-        const expected = process.env.DEMO_LOGIN_PASSWORD ?? "";
-        if (expected && credentials.passphrase !== expected) {
-          throw new Error("INVALID_PASSPHRASE");
-        }
-
-        const email = normalizeEmail(credentials.email);
-        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-          throw new Error("INVALID_EMAIL");
-        }
-
-        return {
-          id: demoGoogleId(email),
-          name: credentials.name?.trim() || email.split("@")[0] || "Member",
-          email,
-          image: null,
-        };
-      },
-    }),
-  );
-}
 
 /* ==========================================================================
    OPTIONS
@@ -315,4 +258,3 @@ export const googleOAuthConfigured = Boolean(
   process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET,
 );
 
-export const demoLoginEnabled = DEMO_LOGIN_ENABLED;

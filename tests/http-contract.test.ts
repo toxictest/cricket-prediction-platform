@@ -296,4 +296,51 @@ describe.skipIf(!serverUp)("auth endpoints", () => {
     const body = await res.json();
     expect(body.user).toBeUndefined();
   });
+
+  /* ------------------------------------------------------------------
+     Google-only authentication.
+
+     These assertions exist to keep a removed feature removed. The build
+     previously shipped an env-gated credentials provider ("Developer
+     Access") that accepted an email + passphrase and provisioned a real
+     database row. It was deleted so that every account traces back to a
+     verified Google identity. A future refactor that reintroduces a
+     credentials provider — or merely re-renders its form — will fail here.
+     ------------------------------------------------------------------ */
+  it("registers exactly one provider: google", async () => {
+    const res = await raw("/api/auth/providers");
+    const body = await res.json();
+
+    expect(Object.keys(body)).toEqual(["google"]);
+    expect(body).not.toHaveProperty("credentials");
+    expect(body).not.toHaveProperty("developer");
+  });
+
+  it("offers no email/password sign-in UI on /login", async () => {
+    const res = await raw("/login");
+    expect(res.status).toBe(200);
+
+    const html = await res.text();
+    expect(html).not.toMatch(/Developer Access/i);
+    expect(html).not.toMatch(/Access passphrase/i);
+    expect(html).not.toMatch(/DEMO_LOGIN_PASSWORD/);
+    expect(html.toLowerCase()).not.toContain("bypass channel");
+  });
+
+  it("offers no email/password sign-up UI on /register", async () => {
+    const res = await raw("/register");
+    expect(res.status).toBe(200);
+
+    const html = await res.text();
+    expect(html).not.toMatch(/Developer Access/i);
+    expect(html).not.toMatch(/Create Member Record/i);
+    expect(html).not.toMatch(/DEMO_LOGIN_PASSWORD/);
+  });
+
+  it("still exposes the Google button on both auth screens", async () => {
+    for (const path of ["/login", "/register"]) {
+      const html = await (await raw(path)).text();
+      expect(html).toMatch(/accounts\.google\.com|Continue with Google|Register with Google/i);
+    }
+  });
 });

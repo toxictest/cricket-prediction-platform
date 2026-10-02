@@ -10,12 +10,8 @@ import {
   CheckCircle2,
   ChevronRight,
   Gift,
-  KeyRound,
   Loader2,
-  Lock,
-  Mail,
   ShieldCheck,
-  User,
   X,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -24,34 +20,12 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
-import { Separator } from "@/components/ui/separator";
-
-/* ==========================================================================
-   GOOGLE GLYPH
-   ========================================================================== */
-
-function GoogleMark({ className }: { className?: string }) {
-  return (
-    <svg viewBox="0 0 48 48" className={className} aria-hidden="true" focusable="false">
-      <path
-        fill="#FFC107"
-        d="M43.611 20.083H42V20H24v8h11.303c-1.649 4.657-6.08 8-11.303 8-6.627 0-12-5.373-12-12s5.373-12 12-12c3.059 0 5.842 1.154 7.961 3.039l5.657-5.657C34.046 6.053 29.268 4 24 4 12.955 4 4 12.955 4 24s8.955 20 20 20 20-8.955 20-20c0-1.341-.138-2.65-.389-3.917z"
-      />
-      <path
-        fill="#FF3D00"
-        d="M6.306 14.691l6.571 4.819C14.655 15.108 18.961 12 24 12c3.059 0 5.842 1.154 7.961 3.039l5.657-5.657C34.046 6.053 29.268 4 24 4 16.318 4 9.656 8.337 6.306 14.691z"
-      />
-      <path
-        fill="#4CAF50"
-        d="M24 44c5.166 0 9.86-1.977 13.409-5.192l-6.19-5.238C29.141 35.091 26.715 36 24 36c-5.202 0-9.619-3.317-11.283-7.946l-6.522 5.025C9.505 39.556 16.227 44 24 44z"
-      />
-      <path
-        fill="#1976D2"
-        d="M43.611 20.083H42V20H24v8h11.303c-.792 2.237-2.231 4.166-4.087 5.571.001-.001.002-.001.003-.002l6.19 5.238C36.971 39.205 44 34 44 24c0-1.341-.138-2.65-.389-3.917z"
-      />
-    </svg>
-  );
-}
+import { GoogleMark } from "@/components/auth/google-mark";
+import {
+  SSO_HOLD_MS,
+  SSO_TRANSIT_KEY,
+  SsoFireOverlay,
+} from "@/components/effects/sso-fire-overlay";
 
 /* ==========================================================================
    TYPES
@@ -68,11 +42,9 @@ type ReferralState =
    ========================================================================== */
 
 export function RegisterForm({
-  demoEnabled = false,
   configured = true,
   initialReferral = null,
 }: {
-  demoEnabled?: boolean;
   configured?: boolean;
   initialReferral?: string | null;
 }) {
@@ -80,18 +52,14 @@ export function RegisterForm({
   const searchParams = useSearchParams();
   const { data: session, status } = useSession();
 
-  const [pending, setPending] = useState<"google" | "developer" | null>(null);
+  const [pending, setPending] = useState(false);
+  const [transit, setTransit] = useState(false);
+  const watchdogRef = useRef<number | null>(null);
+
   const [referral, setReferral] = useState(initialReferral ?? "");
   const [referralState, setReferralState] = useState<ReferralState>(
     initialReferral ? { status: "checking" } : { status: "idle" },
   );
-
-  // Developer access
-  const [devOpen, setDevOpen] = useState(false);
-  const [devEmail, setDevEmail] = useState("");
-  const [devName, setDevName] = useState("");
-  const [devPassphrase, setDevPassphrase] = useState("");
-  const [devError, setDevError] = useState<string | null>(null);
 
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -167,12 +135,17 @@ export function RegisterForm({
   useEffect(
     () => () => {
       if (debounceRef.current) clearTimeout(debounceRef.current);
+      if (watchdogRef.current !== null) window.clearTimeout(watchdogRef.current);
     },
     [],
   );
 
   /* ======================================================================
      PERSIST THE CODE INTO THE HTTPONLY COOKIE BEFORE REDIRECTING
+     ----------------------------------------------------------------------
+     The cookie is the only channel that survives the round-trip to Google, so
+     it must be written before the browser leaves. Done inside the overlay
+     window so a slow request never stalls the animation.
      ====================================================================== */
   const persistReferral = useCallback(async (): Promise<boolean> => {
     const code = referral.trim().toUpperCase();
@@ -206,80 +179,81 @@ export function RegisterForm({
 
   /* ======================================================================
      GOOGLE REGISTRATION
+     ----------------------------------------------------------------------
+     The referral POST and the transit animation run CONCURRENTLY: the effect
+     is timed, the network call is not, so the two are joined with Promise.all
+     rather than sequenced. If the request settles early the overlay still
+     plays out its full length; if it is slow the redirect simply waits.
      ====================================================================== */
   const handleGoogle = useCallback(async () => {
     if (!configured) {
       toast.error("Google OAuth is not configured", {
         description:
-          "Set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET in .env, then restart the dev server.",
+          "Set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET, then redeploy. No other sign-up method is enabled.",
         duration: 9000,
       });
       return;
     }
 
-    setPending("google");
-
-    if (referral.trim()) await persistReferral();
+    setPending(true);
+    setTransit(true);
 
     try {
+      window.sessionStorage.setItem(SSO_TRANSIT_KEY, String(Date.now()));
+    } catch {
+      /* storage unavailable — the arrival burst simply will not play */
+    }
+
+    watchdogRef.current = window.setTimeout(() => {
+      setTransit(false);
+      setPending(false);
+    }, 12000);
+
+    const persist = referral.trim() ? persistReferral() : Promise.resolve(true);
+    const hold = new Promise<void>((resolve) =>
+      window.setTimeout(resolve, SSO_HOLD_MS),
+    );
+
+    try {
+      await Promise.all([persist, hold]);
       await signIn("google", { callbackUrl });
+      // `signIn` navigates away; execution normally stops here.
     } catch (caught) {
       console.error("[register] google sign-in failed:", caught);
-      toast.error("Could not start Google registration");
-      setPending(null);
-    }
-  }, [configured, referral, persistReferral, callbackUrl]);
 
-  /* ======================================================================
-     DEVELOPER REGISTRATION
-     ====================================================================== */
-  const handleDeveloper = useCallback(async () => {
-    setDevError(null);
-
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(devEmail.trim())) {
-      setDevError("Enter a valid email address.");
-      return;
-    }
-
-    setPending("developer");
-
-    try {
-      await persistReferral();
-
-      const result = await signIn("developer", {
-        email: devEmail.trim().toLowerCase(),
-        name: devName.trim(),
-        passphrase: devPassphrase,
-        redirect: false,
-      });
-
-      if (!result || result.error) {
-        setDevError(
-          result?.error === "INVALID_PASSPHRASE"
-            ? "Wrong passphrase. It must match DEMO_LOGIN_PASSWORD in .env."
-            : "Provisioning failed. Check the server logs.",
-        );
-        setPending(null);
-        return;
+      if (watchdogRef.current !== null) {
+        window.clearTimeout(watchdogRef.current);
+        watchdogRef.current = null;
+      }
+      try {
+        window.sessionStorage.removeItem(SSO_TRANSIT_KEY);
+      } catch {
+        /* no-op */
       }
 
-      toast.success("Account provisioned", {
-        description: "Your referral code has been generated.",
+      toast.error("Could not start Google registration", {
+        description:
+          "Check your connection and that the redirect URI matches Google Cloud Console.",
       });
-      router.replace(callbackUrl);
-      router.refresh();
-    } catch (caught) {
-      console.error("[register] developer sign-in failed:", caught);
-      setDevError("Unexpected error. Please try again.");
-      setPending(null);
+      setTransit(false);
+      setPending(false);
     }
-  }, [devEmail, devName, devPassphrase, persistReferral, callbackUrl, router]);
+  }, [configured, referral, persistReferral, callbackUrl]);
 
   /* ======================================================================
      RENDER
      ====================================================================== */
   return (
     <div className="w-full">
+      <SsoFireOverlay
+        open={transit}
+        caption={
+          referral.trim()
+            ? "attaching referral · provisioning account"
+            : "provisioning your member record"
+        }
+      />
+
       {/* ---------------- referral field ---------------- */}
       <div className="mb-6 space-y-2.5">
         <Label htmlFor="referral">
@@ -316,7 +290,10 @@ export function RegisterForm({
               />
             )}
             {referralState.status === "valid" && (
-              <BadgeCheck className="h-4 w-4 text-emerald-400" aria-hidden="true" />
+              <BadgeCheck
+                className="h-4 w-4 text-emerald-400"
+                aria-hidden="true"
+              />
             )}
             {referralState.status === "invalid" && (
               <X className="h-4 w-4 text-red-500" aria-hidden="true" />
@@ -368,18 +345,18 @@ export function RegisterForm({
       {/* ---------------- primary CTA ---------------- */}
       <Button
         type="button"
-        onClick={handleGoogle}
-        disabled={pending !== null || status === "loading"}
-        loading={pending === "google"}
-        loadingText="Provisioning account"
+        onClick={() => void handleGoogle()}
+        disabled={pending || status === "loading"}
+        loading={pending}
+        loadingText="Contacting Google"
         size="lg"
         variant="cyber"
         className={cn(
-          "group h-14 w-full gap-3",
+          "group relative h-14 w-full gap-3",
           "border border-white/12 bg-white/[0.045] text-zinc-100",
           "font-sans text-[15px] font-medium normal-case tracking-normal",
-          "hover:border-white/25 hover:bg-white/[0.08]",
-          "hover:shadow-[0_0_26px_rgba(239,68,68,0.25)]",
+          "hover:border-red-500/40 hover:bg-white/[0.08]",
+          "hover:shadow-[0_0_34px_rgba(239,68,68,0.35)]",
         )}
       >
         <GoogleMark className="h-[18px] w-[18px] shrink-0" />
@@ -390,10 +367,39 @@ export function RegisterForm({
         />
       </Button>
 
+      {/* ---------------- no-credentials warning ---------------- */}
+      {!configured && (
+        <div className="mt-4 rounded-md border border-red-500/35 bg-red-500/[0.07] p-4">
+          <p className="flex items-center gap-2 font-mono text-[10px] font-bold uppercase tracking-wider text-red-300">
+            <AlertTriangle className="h-3.5 w-3.5" aria-hidden="true" />
+            No sign-up method is configured
+          </p>
+          <p className="mt-2 text-[12.5px] leading-relaxed text-zinc-400">
+            Registration runs through Google only — email and password sign-up
+            has been removed. Add{" "}
+            <code className="rounded bg-black/50 px-1.5 py-0.5 font-mono text-[11px] text-amber-200">
+              GOOGLE_CLIENT_ID
+            </code>{" "}
+            and{" "}
+            <code className="rounded bg-black/50 px-1.5 py-0.5 font-mono text-[11px] text-amber-200">
+              GOOGLE_CLIENT_SECRET
+            </code>{" "}
+            to your environment, then restart. See{" "}
+            <span className="font-mono text-[11px] text-zinc-300">
+              DEPLOY.md
+            </span>
+            .
+          </p>
+        </div>
+      )}
+
       {/* ---------------- what gets stored ---------------- */}
       <div className="mt-6 rounded-md border border-white/[0.07] bg-black/30 p-4">
         <p className="flex items-center gap-2 font-mono text-[9.5px] font-bold uppercase tracking-[0.18em] text-zinc-500">
-          <ShieldCheck className="h-3.5 w-3.5 text-red-500/70" aria-hidden="true" />
+          <ShieldCheck
+            className="h-3.5 w-3.5 text-red-500/70"
+            aria-hidden="true"
+          />
           Stored on your member record
         </p>
         <ul className="mt-3 grid grid-cols-2 gap-2">
@@ -414,158 +420,13 @@ export function RegisterForm({
         </p>
       </div>
 
-      {/* ==================================================================
-          DEVELOPER ACCESS
-          ================================================================== */}
-      {demoEnabled && (
-        <>
-          <div className="my-7 flex items-center gap-3">
-            <Separator className="flex-1" />
-            <span className="font-mono text-[9.5px] uppercase tracking-[0.2em] text-zinc-600">
-              or
-            </span>
-            <Separator className="flex-1" />
-          </div>
-
-          <AnimatePresence initial={false} mode="wait">
-            {!devOpen ? (
-              <motion.div
-                key="closed"
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
-              >
-                <Button
-                  type="button"
-                  variant="outline"
-                  className="w-full"
-                  onClick={() => setDevOpen(true)}
-                >
-                  <KeyRound aria-hidden="true" />
-                  Developer Access
-                </Button>
-                <p className="mt-3 text-center font-mono text-[9.5px] uppercase tracking-[0.14em] text-zinc-600">
-                  Local testing only · disabled in production
-                </p>
-              </motion.div>
-            ) : (
-              <motion.form
-                key="open"
-                initial={{ opacity: 0, height: 0 }}
-                animate={{ opacity: 1, height: "auto" }}
-                exit={{ opacity: 0, height: 0 }}
-                transition={{ duration: 0.3, ease: [0.22, 1, 0.36, 1] }}
-                className="overflow-hidden"
-                onSubmit={(event) => {
-                  event.preventDefault();
-                  void handleDeveloper();
-                }}
-              >
-                <div className="space-y-4 rounded-md border border-amber-500/25 bg-amber-500/[0.03] p-4">
-                  <div className="flex items-center justify-between gap-3">
-                    <Badge variant="warning">
-                      <KeyRound aria-hidden="true" />
-                      Bypass channel
-                    </Badge>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setDevOpen(false);
-                        setDevError(null);
-                      }}
-                      className="font-mono text-[10px] uppercase tracking-wider text-zinc-500 transition-colors hover:text-red-400"
-                    >
-                      cancel
-                    </button>
-                  </div>
-
-                  <div className="space-y-2">
-                    <Label htmlFor="reg-email">Member email</Label>
-                    <div className="relative">
-                      <Mail
-                        className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-600"
-                        aria-hidden="true"
-                      />
-                      <Input
-                        id="reg-email"
-                        type="email"
-                        inputMode="email"
-                        placeholder="newmember@example.com"
-                        className="pl-10"
-                        terminal
-                        value={devEmail}
-                        onChange={(event) => setDevEmail(event.target.value)}
-                        required
-                      />
-                    </div>
-                  </div>
-
-                  <div className="space-y-2">
-                    <Label htmlFor="reg-name">Display name</Label>
-                    <div className="relative">
-                      <User
-                        className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-600"
-                        aria-hidden="true"
-                      />
-                      <Input
-                        id="reg-name"
-                        type="text"
-                        placeholder="Test Analyst"
-                        className="pl-10"
-                        value={devName}
-                        onChange={(event) => setDevName(event.target.value)}
-                      />
-                    </div>
-                  </div>
-
-                  <div className="space-y-2">
-                    <Label htmlFor="reg-pass">Access passphrase</Label>
-                    <div className="relative">
-                      <Lock
-                        className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-600"
-                        aria-hidden="true"
-                      />
-                      <Input
-                        id="reg-pass"
-                        type="password"
-                        placeholder="DEMO_LOGIN_PASSWORD"
-                        className="pl-10"
-                        terminal
-                        value={devPassphrase}
-                        onChange={(event) => setDevPassphrase(event.target.value)}
-                      />
-                    </div>
-                  </div>
-
-                  {devError && (
-                    <p
-                      role="alert"
-                      className="flex items-start gap-2 rounded border border-red-500/35 bg-red-500/[0.07] px-3 py-2 text-[12.5px] text-red-300"
-                    >
-                      <AlertTriangle
-                        className="mt-0.5 h-3.5 w-3.5 shrink-0"
-                        aria-hidden="true"
-                      />
-                      {devError}
-                    </p>
-                  )}
-
-                  <Button
-                    type="submit"
-                    variant="outline"
-                    className="w-full"
-                    loading={pending === "developer"}
-                    loadingText="Creating account"
-                  >
-                    <KeyRound aria-hidden="true" />
-                    Create Member Record
-                  </Button>
-                </div>
-              </motion.form>
-            )}
-          </AnimatePresence>
-        </>
-      )}
+      {/* ---------------- members-only note ---------------- */}
+      <div className="mt-5 flex items-center justify-center gap-2">
+        <Badge variant="neon">Google SSO only</Badge>
+        <span className="font-mono text-[9.5px] uppercase tracking-[0.14em] text-zinc-600">
+          one account per verified email
+        </span>
+      </div>
     </div>
   );
 }

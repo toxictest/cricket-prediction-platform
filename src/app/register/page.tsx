@@ -4,7 +4,7 @@ import Link from "next/link";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { getServerSession } from "next-auth";
-import { authOptions, demoLoginEnabled, googleOAuthConfigured } from "@/lib/auth";
+import { authOptions, googleOAuthConfigured } from "@/lib/auth";
 import { AuthShell } from "@/components/auth/auth-shell";
 import { RegisterForm } from "@/components/auth/register-form";
 import { Badge } from "@/components/ui/badge";
@@ -78,7 +78,6 @@ export default async function RegisterPage() {
     >
       <Suspense fallback={<FormSkeleton />}>
         <RegisterForm
-          demoEnabled={demoLoginEnabled}
           configured={googleOAuthConfigured}
           initialReferral={referral}
         />

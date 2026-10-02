@@ -29,6 +29,7 @@ import { Progress } from "@/components/ui/progress";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { CopyButton } from "@/components/shared/copy-button";
 import { DashboardReferrals } from "@/components/dashboard/referral-panel";
+import { AuthWelcomeBurst } from "@/components/effects/auth-welcome-burst";
 import { cn } from "@/lib/utils";
 
 export const metadata: Metadata = {
@@ -155,6 +156,13 @@ export default async function DashboardPage() {
 
   return (
     <>
+      {/*
+        Plays the fire-burst payoff once when the visitor arrives from the
+        Google OAuth handshake. It reads and clears a one-shot sessionStorage
+        flag, so it is silent on every other visit to this page.
+      */}
+      <AuthWelcomeBurst />
+
       <Navbar />
 
       <main id="main" className="relative flex-1 pb-8 pt-24 sm:pt-28">

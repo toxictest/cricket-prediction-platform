@@ -128,6 +128,9 @@ Legend: 🎨 UI · ⚙️ logic · 🔒 security-relevant · 📄 docs/config
 | 🎨 `src/components/effects/terminal-window.tsx` | Types lines out character by character with a blinking caret. `role="log"` + `aria-live="polite"`. |
 | 🎨 `src/components/effects/reveal.tsx` | `Reveal`, `StaggerGroup`, `StaggerItem`, `TypewriterText`, `GlitchText` — all no-ops under reduced motion. |
 | 🎨 `src/components/effects/section-heading.tsx` | Consistent eyebrow/title/description header with a pulsing status dot. |
+| 🎨 `src/components/effects/sso-fire-overlay.tsx` | **The Google SSO fire handshake.** Full-screen "secure transit" effect: fire canvas at 2× intensity, masked cyber grid, floor flare, pulse rings, and a glass card with a terminal→Google node link, beam packets, a six-line transit log and a determinate progress bar. Portalled to `document.body` (see note below). Exports `SSO_TRANSIT_KEY`, `SSO_STEPS`, `SSO_STEP_MS`, `SSO_HOLD_MS` so the outbound and inbound halves share one contract. |
+| 🎨 `src/components/effects/auth-welcome-burst.tsx` | **The arrival payoff.** Mounted on `/dashboard`; consumes the one-shot `sessionStorage` flag and plays a 2.6 s fire burst with an **ACCESS GRANTED** badge. Reads `matchMedia` imperatively inside a once-only effect — depending on `useReducedMotion()` would cancel the dismissal timer on its hydration transition and pin the overlay on screen forever. |
+| 🎨 `src/components/auth/google-mark.tsx` | The official Google "G" as an inline SVG. Inlined so it renders with no network request, works offline, and satisfies the strict `img-src` CSP. Shared by both auth forms instead of being duplicated. |
 
 ---
 
@@ -200,7 +203,7 @@ Legend: 🎨 UI · ⚙️ logic · 🔒 security-relevant · 📄 docs/config
 | 📄 `README.md` | 18-section guide: features, stack, quick start, env vars, Google OAuth, the developer channel, database, artifact handling, full file structure, routes/API, **how the gate works**, design system, deployment (Vercel + Docker + checklist), security, scripts, troubleshooting, and the verification log. |
 | 📄 `FILE_MANIFEST.md` | This file. |
 | 📄 `storage/apk/README.md` | Explains the private staging directory and why it is preferred over `public/`. |
-| 📄 `docs/screenshots/*.png` | 16 captures taken from the running application (landing sections, auth, the guest gate, the unlocked Download Center, dashboard, and three mobile widths). |
+| 📄 `docs/screenshots/*.png` | 21 captures taken from the running application: landing sections, auth, the guest gate, the unlocked Download Center, dashboard, the SSO fire handshake in three stages (early / full log / ACCESS GRANTED), the arrival burst, and mobile widths. |
 
 ---
 
@@ -228,3 +231,29 @@ Legend: 🎨 UI · ⚙️ logic · 🔒 security-relevant · 📄 docs/config
 | `npm run db:seed` | `tsx prisma/seed.ts` |
 | `npm run db:reset` | `prisma migrate reset --force` |
 | `npm run apk:placeholder` | Generate the demo artifact |
+
+---
+
+## Portals and `backdrop-filter` — a bug worth remembering
+
+Both SSO effect components are portalled to `document.body`. That is not a
+stylistic choice; it is load-bearing.
+
+`position: fixed` normally positions against the viewport. But if **any**
+ancestor has a `backdrop-filter` other than `none`, that ancestor becomes the
+*containing block* for fixed-position descendants. Both effects are rendered
+inside the auth card, and that card uses `.glass-strong`, which sets
+`backdrop-filter: blur(24px) saturate(150%)`.
+
+The first implementation used a plain `fixed inset-0` overlay. It was therefore
+clamped to the auth card's box — squashed into the form, clipped by the card's
+`overflow-hidden`, and invisible as a full-screen effect. Verified by measuring
+the element: it reported the card's dimensions instead of the viewport's.
+
+Wrapping the output in `createPortal(node, document.body)` escapes the
+containing block entirely, because the portal mounts outside the offending
+ancestor. Both components also gate on a `mounted` flag, since `document` does
+not exist during server rendering.
+
+If you ever move these components somewhere else and drop the portal, expect the
+overlay to shrink to its parent's box again.

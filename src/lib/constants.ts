@@ -354,8 +354,5 @@ export function tierForReferrals(count: number) {
    MISC
    ========================================================================== */
 
-export const DEMO_LOGIN_ENABLED =
-  process.env.NEXT_PUBLIC_ENABLE_DEMO_LOGIN === "true";
-
 export const NEWSLETTER_NOTE =
   "Member-only. No spam, no third-party sharing, unsubscribe in one click.";

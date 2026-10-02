@@ -5,7 +5,7 @@ import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { getServerSession } from "next-auth";
 import { ShieldCheck } from "lucide-react";
-import { authOptions, demoLoginEnabled, googleOAuthConfigured } from "@/lib/auth";
+import { authOptions, googleOAuthConfigured } from "@/lib/auth";
 import { AuthShell } from "@/components/auth/auth-shell";
 import { LoginForm } from "@/components/auth/login-form";
 import { AccessNotice } from "@/components/auth/access-notice";
@@ -121,7 +121,6 @@ export default async function LoginPage({
           {gatedRoute && <AccessNotice requestedPath={gatedRoute} className="mb-6" />}
 
           <LoginForm
-            demoEnabled={demoLoginEnabled}
             configured={googleOAuthConfigured}
             referralFromCookie={referral}
           />

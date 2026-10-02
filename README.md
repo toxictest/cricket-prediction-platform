@@ -21,7 +21,7 @@ verified again on the server before a single byte of the APK is streamed.
 4. [Quick Start](#4-quick-start)
 5. [Environment Variables](#5-environment-variables)
 6. [Google OAuth Setup](#6-google-oauth-setup)
-7. [Working Without Google Credentials](#7-working-without-google-credentials)
+7. [Google-Only Authentication](#7-google-only-authentication)
 8. [Database](#8-database)
 9. [The APK Artifact](#9-the-apk-artifact)
 10. [Project Structure](#10-project-structure)
@@ -169,16 +169,14 @@ Never commit it — only `.env.example` is tracked.
 
 | Variable | Purpose | Default |
 |---|---|---|
-| `NEXT_PUBLIC_ENABLE_DEMO_LOGIN` | Show the passwordless developer channel | `false` |
-| `DEMO_LOGIN_PASSWORD` | Passphrase for that channel | `cyber-demo-2026` |
 | `APK_FILE_NAME` | Filename served by `/api/download` | `app-release.apk` |
 | `APK_VERSION` | Version shown across the UI | `1.0.0` |
 | `REFERRAL_CODE_LENGTH` | Random body length (4–16) | `8` |
 | `REFERRAL_CODE_PREFIX` | Code prefix (≤ 6 chars) | `CRC` |
 
-> **Production rule:** `NEXT_PUBLIC_ENABLE_DEMO_LOGIN` **must** be `false`.
-> The login form only renders the developer panel when it is `"true"`, and the
-> credentials provider is not even registered with NextAuth otherwise.
+> **Note:** authentication is Google-only. `GOOGLE_CLIENT_ID` and
+> `GOOGLE_CLIENT_SECRET` are the only required credentials, and without them
+> no account can be created or accessed.
 
 ---
 
@@ -223,31 +221,58 @@ Never commit it — only `.env.example` is tracked.
 
 ---
 
-## 7. Working Without Google Credentials
+## 7. Google-Only Authentication
 
-The platform ships a **developer access channel** so the entire
-register → dashboard → download journey is testable before OAuth exists.
+**Google is the only sign-in method.** There is no email/password fallback and
+no developer bypass channel — that scaffolding was removed deliberately, so
+every row in `users` corresponds to a real, verified Google identity.
 
-```env
-NEXT_PUBLIC_ENABLE_DEMO_LOGIN="true"
-DEMO_LOGIN_PASSWORD="cyber-demo-2026"
-```
+Two consequences are worth stating plainly:
 
-A "Developer Access" panel then appears underneath the Google button on both
-`/login` and `/register`. It is **not a bypass** — it authenticates through
-NextAuth's credentials provider and runs the *identical* `signIn` callback,
-writing a real row to `users` with a real referral code. The only difference is
-that the `google_id` column receives a namespaced `demo_<base64url>` value so it
-can never collide with a genuine Google `sub` claim.
+- With `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` unset, **nobody can sign in
+  or register.** `/login` and `/register` render an explicit *"No sign-in
+  method is configured"* panel rather than a button that fails at the end.
+- `/api/auth/providers` returns exactly one entry. There is no credentials
+  provider registered, so there is nothing to brute-force or bypass.
 
-```bash
-npm run db:seed
-# then sign in with any seeded email, e.g. aarav.mehta@example.com
-# passphrase: cyber-demo-2026
-```
+Configure credentials once, following §6 locally or `DEPLOY.md` for a hosted
+deployment.
 
-Set `NEXT_PUBLIC_ENABLE_DEMO_LOGIN="false"` (or delete the line) before any
-public deployment. The provider is not even registered when the flag is off.
+### The SSO fire handshake
+
+Signing in with Google means leaving the site, so the effect is split across
+the round-trip. The two halves are joined by a one-shot `sessionStorage` flag.
+
+**Outbound — `SsoFireOverlay`** (`src/components/effects/sso-fire-overlay.tsx`)
+renders the instant the Google button is pressed:
+
+| Layer | What it is |
+|---|---|
+| Backdrop | `#09090b` at 94 % opacity + `backdrop-blur-xl` |
+| Fire | `FireParticleCanvas` at density 300, intensity 2 |
+| Cyber grid | dual CSS gradients, radially masked to the centre |
+| Floor flare | bottom radial gradient + three expanding shockwave rings |
+| Handshake card | glass panel showing a terminal → Google node link, a beam with four travelling packets, a six-line transit log and a determinate progress bar |
+
+The log advances one line every 300 ms, and the browser is held for
+`SSO_STEPS.length × 300 + 260 ≈ 2.06 s` before `signIn("google")` fires. The
+delay is deliberate: it converts a hard jump into a visible state change.
+
+**Inbound — `AuthWelcomeBurst`**
+(`src/components/effects/auth-welcome-burst.tsx`) is mounted in
+`src/app/dashboard/page.tsx`. On mount it reads `cpc:sso:transit` from
+`sessionStorage`, removes it synchronously, and — only if it was present —
+plays a 2.6 s fire burst with an **ACCESS GRANTED** badge.
+
+`sessionStorage` is the correct store here: it is tab-scoped, it survives the
+same-tab redirect to Google and back, and it is discarded when the tab closes,
+so a returning visitor never sees a stale celebration. Because the key is
+deleted on read, reloading the dashboard does not replay it.
+
+Both halves fail safely. The overlay locks body scroll and restores it
+unconditionally on unmount; a 12 s watchdog un-freezes the form if the redirect
+never fires; and a failed or cancelled handshake clears the flag so no spurious
+burst appears later.
 
 ---
 
@@ -625,6 +650,7 @@ signing-in email.
 | **Terminal** | `TerminalWindow` types lines with a blinking caret; `role="log"` + `aria-live="polite"` |
 | **Scanlines / grain** | Repeating linear gradient + inline SVG `feTurbulence` data URI (no network request) |
 | **Glitch** | RGB-split `GlitchText` with a flicker keyframe |
+| **SSO fire handshake** | `SsoFireOverlay` + `AuthWelcomeBurst` — a fire particle field at 2× intensity under a glass handshake card, beam packets, a stepped transit log and shockwave rings. Bridges the Google round-trip via a one-shot `sessionStorage` flag |
 
 ### Typography
 
@@ -723,7 +749,6 @@ evaluated at collection time, so a flag set inside a hook always reads as
    NEXT_PUBLIC_SITE_URL    https://your-domain.com
    GOOGLE_CLIENT_ID        …
    GOOGLE_CLIENT_SECRET    …
-   NEXT_PUBLIC_ENABLE_DEMO_LOGIN  false
    ```
 
    Do **not** set `SHADOW_DATABASE_URL` — it is only for local `migrate dev`.
@@ -781,8 +806,8 @@ CMD ["npm", "start"]
 - [ ] Confirm a logged-out request to `/download` returns `307` to `/login`
 - [ ] Confirm `curl /api/download` without a cookie returns `401`
 - [ ] Replace the demo APK with a signed release build
-- [ ] Set `NEXT_PUBLIC_ENABLE_DEMO_LOGIN="false"`
 - [ ] Verify the redirect URI in Google Cloud matches production exactly
+- [ ] Confirm `/api/auth/providers` returns `google` and nothing else
 
 ---
 

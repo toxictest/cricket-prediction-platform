@@ -247,8 +247,10 @@ async function main() {
   console.log(`   download logs  ${downloadTotal}`);
   console.log("─────────────────────────────────────────\n");
 
-  console.log("Sign in with Developer Access using any seeded email,");
-  console.log("e.g. aarav.mehta@example.com\n");
+  console.log("These rows exist as demo data for the referral tree and the");
+  console.log("dashboard leaderboard. Sign-in is Google-only, so they are");
+  console.log("not reachable with a password — register your own Google");
+  console.log("account to create a real session.\n");
 }
 
 main()

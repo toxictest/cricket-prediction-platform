@@ -7,7 +7,7 @@ import { generateUniqueReferralCode, resolveReferrerId } from "@/lib/referral";
    ========================================================================== */
 
 export type ProvisionInput = {
-  /** Google `sub` claim, or a namespaced synthetic id for developer sign-in. */
+  /** The Google `sub` claim — the stable, never-reassigned account id. */
   googleId: string;
   name: string;
   email: string;
@@ -99,8 +99,9 @@ export async function provisionUser(
     const user = await prisma.user.update({
       where: { id: existing.id },
       data: {
-        // Re-bind googleId when the row was originally created by another
-        // provider for the same verified email address.
+        // Re-bind googleId when the row predates this Google account — e.g.
+        // seeded demo data, or an account later linked to a different Google
+        // identity for the same verified email address.
         ...(existing.googleId !== googleId ? { googleId } : {}),
         name,
         image,
