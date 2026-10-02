@@ -106,11 +106,10 @@ cp .env.example .env
 #    generate a secret with:  openssl rand -base64 32
 
 # 3 — bootstrap PostgreSQL: install if needed, create role + databases,
-#     generate .env with a NEXTAUTH_SECRET, apply migrations, and seed
+#     generate .env with a NEXTAUTH_SECRET and apply migrations
 npm run db:setup
 
-# 4 — generate a placeholder download artifact
-npm run apk:placeholder
+# 4 — (optional) stage a release build in storage/apk/app-release.apk
 
 # 5 — start the dev server
 npm run dev
@@ -119,7 +118,7 @@ npm run dev
 > **`npm run db:setup` is the fast path.** It is idempotent and safe to re-run,
 > and it handles a machine with no PostgreSQL at all. If you already have a
 > database you want to point at, skip it and set `DATABASE_URL` in `.env`
-> yourself, then run `npm run db:deploy` and optionally `npm run db:seed`.
+> yourself, then run `npm run db:deploy`.
 >
 > Use `npm run db:setup:reset` to drop and rebuild from scratch.
 
@@ -173,10 +172,17 @@ Never commit it — only `.env.example` is tracked.
 | `APK_VERSION` | Version shown across the UI | `1.0.0` |
 | `REFERRAL_CODE_LENGTH` | Random body length (4–16) | `8` |
 | `REFERRAL_CODE_PREFIX` | Code prefix (≤ 6 chars) | `CRC` |
+| `NEXT_PUBLIC_CONTACT_EMAIL` | Address published on the contact and legal pages | **none** |
+| `NEXT_PUBLIC_SECURITY_EMAIL` | Security-disclosure address | falls back to the contact address |
 
 > **Note:** authentication is Google-only. `GOOGLE_CLIENT_ID` and
 > `GOOGLE_CLIENT_SECRET` are the only required credentials, and without them
 > no account can be created or accessed.
+
+> **Contact addresses have no default.** Unset, the UI renders an explicit
+> "email not configured" state. It never falls back to `example.com` — that
+> domain is reserved by RFC 2606, so mail sent to it is silently discarded while
+> the page still looks like a working support channel.
 
 ---
 
@@ -317,8 +323,7 @@ npm run db:push        # sync schema without a migration (prototyping)
 npm run db:migrate     # create + apply a migration (development)
 npm run db:deploy      # apply pending migrations (CI / production)
 npm run db:studio      # browse data in Prisma Studio
-npm run db:seed        # load the demo member network
-npm run db:reset       # drop, re-migrate and re-seed
+npm run db:reset       # drop and re-migrate (leaves the DB empty)
 ```
 
 ### Referral code generation
@@ -350,36 +355,59 @@ The Download Center resolves its artifact in this order:
 | # | Location | Notes |
 |---|---|---|
 | 1 | `storage/apk/app-release.apk` | Private staging dir — **not** web-served. Preferred. |
-| 2 | `public/downloads/app-release.apk` | Tracked mirror, web-served at `/downloads/…` |
+| 2 | `public/downloads/app-release.apk` | Web-served at `/downloads/…`. Still gated by middleware, but the CDN path is strictly worse than #1. |
 | 3 | `NEXT_PUBLIC_APK_DOWNLOAD_URL` | External CDN / object storage |
 
-### Demo placeholder
+### No build ships in this repository
 
-```bash
-npm run apk:placeholder
-```
+`storage/apk/` is intentionally empty and nothing generates a fake binary. This
+is a deliberate change: the project previously shipped a 1.7 KB stub APK plus a
+generator for it, which meant the Download Center could display a version, a
+size and a checksum for a file that **could never be installed**.
 
-Writes a valid, uncompressed **ZIP** archive (an `.apk` *is* a ZIP) containing
-`README.txt`, `BUILD_INFO.json` and `NOT_AN_INSTALLABLE_BUILD.txt`. It is **not
-installable on Android** — it exists purely so the gate, the audit log, the
-streaming route and the browser save dialog can be exercised. The Download
-Center detects it (anything under 64 KB) and shows an explicit
-"Demo artifact detected" warning.
+Until a real build is staged:
+
+- `/download` renders a **"No build staged on this server"** panel naming the
+  exact path to drop the file into.
+- The "Latest stable" badge becomes **"Build pending"**.
+- The checksum row reads *"SHA-256 unavailable — no artifact staged"*.
+- Specification rows that cannot be measured render as **`not set`**.
+- `/api/download` returns `503 BUILD_UNAVAILABLE` to authenticated members.
+
+Nothing is invented to fill the gap. A plausible-looking wrong checksum is worse
+than an obvious blank.
 
 ### Shipping a real build
 
 ```bash
 ./gradlew assembleRelease
 
-cp app/build/outputs/apk/release/app-release.apk \
-   public/downloads/app-release.apk
-# or keep binaries out of version control:
+# preferred: keep binaries out of version control
 mkdir -p storage/apk && cp app-release.apk storage/apk/
 ```
 
-The SHA-256 displayed in the UI is **computed from the bytes on disk** at
-request time (`src/lib/artifact.ts`), so the published checksum always matches
-the file the member receives. Drop in a new build and the page updates itself.
+Optionally add a label beside it — copy `storage/apk/release.example.json` to
+`storage/apk/release.json`:
+
+```json
+{
+  "packageName": "com.yourcompany.cricketterminal",
+  "versionName": "1.0.0",
+  "buildNumber": "1",
+  "minAndroid": "8.0 (Oreo / API 26)",
+  "architecture": "arm64-v8a, armeabi-v7a",
+  "releasedAt": "2026-10-02"
+}
+```
+
+**Only descriptive fields are read from that file.** Size, SHA-256 and — unless
+overridden — the release date are measured from the APK itself
+(`src/lib/artifact.ts`), so the published checksum always matches the bytes the
+member receives. A malformed or missing manifest is not an error; the affected
+rows simply read `not set`.
+
+A file under 64 KB is flagged as a probable stub and the Download Center says so
+explicitly, so a placeholder can never be shipped silently.
 
 The response is served with:
 
@@ -402,13 +430,11 @@ cricket-prediction-platform/
 ├── prisma/
 │   ├── migrations/20261002122519_init/migration.sql
 │   ├── schema.prisma                   # User + DownloadLog
-│   └── seed.ts                         # demo member network
 │
 ├── public/
 │   └── downloads/app-release.apk       # demo artifact (replace with real build)
 │
 ├── scripts/
-│   └── make-placeholder-apk.mjs        # zero-dependency ZIP writer
 │
 ├── docs/screenshots/                   # captured from the running app
 │
@@ -720,7 +746,7 @@ server (`npm run dev` or `npm start`). Point the latter somewhere else with
 
 The integration suites namespace every row with an `it<timestamp>_` prefix and
 delete it in `afterAll`, so they can run repeatedly against a database that also
-holds seed data and manual test accounts. `describe.skipIf` flags are resolved
+holds fixture rows created and torn down by the tests themselves. `describe.skipIf` flags are resolved
 with a **top-level `await`** rather than a `beforeAll` — skip conditions are
 evaluated at collection time, so a flag set inside a hook always reads as
 `false` and silently skips the whole file.
@@ -851,9 +877,7 @@ CMD ["npm", "start"]
 | `npm run db:migrate` | `prisma migrate dev` | Create + apply a migration |
 | `npm run db:deploy` | `prisma migrate deploy` | Apply migrations (CI/prod) |
 | `npm run db:studio` | `prisma studio` | Data GUI |
-| `npm run db:seed` | `tsx prisma/seed.ts` | Demo member network |
-| `npm run db:reset` | `prisma migrate reset --force` | Drop, migrate, re-seed |
-| `npm run apk:placeholder` | `node scripts/make-placeholder-apk.mjs` | Generate the demo artifact |
+| `npm run db:reset` | `prisma migrate reset --force` | Drop and re-migrate (no data is inserted) |
 
 ---
 
@@ -898,7 +922,7 @@ minutes to propagate.
 <details>
 <summary><b>"Access Restricted" appears even though I am signed in</b></summary>
 
-Your JWT is valid but the database row is gone (a reseed dropped it). Sign out
+Your JWT is valid but the database row is gone (the database was reset). Sign out
 and back in to re-provision. Confirm with:
 
 ```bash
@@ -909,7 +933,7 @@ curl -b "next-auth.session-token=<value>" http://localhost:3000/api/session
 <details>
 <summary><b>Download returns 404 "Android build is not staged"</b></summary>
 
-Run `npm run apk:placeholder`, or place a real build in `storage/apk/` or
+Place a real build in `storage/apk/`, or
 `public/downloads/`.
 </details>
 
@@ -1062,14 +1086,14 @@ build on **02 Oct 2026** — **27 ✅ / 0 ❌, 0 console errors**.
 
 | Check | Result |
 |---|---|
-| Guest `GET /downloads/app-release.apk` (static mirror) | `307` → gated ✅ |
-| Member `GET /downloads/app-release.apk` | `200`, `application/vnd.android.package-archive` ✅ |
-| SHA-256 of the mirror bytes equals the shipped artifact | match ✅ |
-| `npx tsx prisma/seed.ts` run three times — `users` row count | `8 → 8 → 8` ✅ |
-| Seed `download_logs` after three seed runs | exactly `11` (no duplicate writes) ✅ |
-
-> The seed script is idempotent by `upsert` on `google_id`; re-running it
-> refreshes the demo rows in place rather than appending duplicates.
+| Database after `npm run db:setup` — `users` row count | `0` (nothing is seeded) ✅ |
+| `download_logs` row count | `0` ✅ |
+| Hero stat strip reads **Members / Referred / Downloads** | `0 / 0 / 0`, counted live ✅ |
+| Hero **DB latency** tile | measured per request, not cached ✅ |
+| Grep for every previously hard-coded figure (`48,200`, `12.4K`, `78.6%`, `99.98%`, `#1042`) | absent from the rendered HTML ✅ |
+| Grep for `example.com` across `/`, `/login`, `/register`, `/contact`, `/terms`, `/privacy` | absent ✅ |
+| `resolveArtifact()` with nothing staged | returns `null` — no invented version, size or hash ✅ |
+| Authenticated `/download` with nothing staged | "No build staged on this server", `Package/ABI/Released` read `not set` ✅ |
 
 ### Environment
 
@@ -1095,7 +1119,7 @@ for Postgres and the test runner.
 ### Reproducing this verification
 
 ```bash
-# 1 — database + schema + seed (idempotent, safe to re-run)
+# 1 — database + schema (idempotent, safe to re-run; inserts nothing)
 npm run db:setup
 
 # 2 — static checks

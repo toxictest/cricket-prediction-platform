@@ -3,13 +3,13 @@
 #  setup-dev-db.sh — one-command local PostgreSQL bootstrap
 # =============================================================================
 #  Creates the role, the database and the shadow database, then applies
-#  migrations and (optionally) seeds the demo network.
+#  migrations. The database starts empty by design — every row in it comes
+#  from a real Google sign-in.
 #
 #  Idempotent: safe to run repeatedly. Re-running will not drop your data.
 #
 #  Usage:
 #    ./scripts/setup-dev-db.sh              # create + migrate
-#    ./scripts/setup-dev-db.sh --seed       # create + migrate + seed
 #    ./scripts/setup-dev-db.sh --reset      # DROP everything and rebuild
 #    ./scripts/setup-dev-db.sh --no-sudo    # already running as root/postgres
 #
@@ -29,16 +29,14 @@ DB_USER="${DB_USER:-cricket}"
 DB_PASSWORD="${DB_PASSWORD:-cricket_dev_password}"
 PG_SUPERUSER="${PG_SUPERUSER:-postgres}"
 
-SEED=0
 RESET=0
 USE_SUDO=1
 
 for arg in "$@"; do
   case "$arg" in
-    --seed)    SEED=1 ;;
     --reset)   RESET=1 ;;
     --no-sudo) USE_SUDO=0 ;;
-    -h|--help) sed -n '2,22p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,20p' "$0"; exit 0 ;;
     *) echo "unknown flag: $arg" >&2; exit 1 ;;
   esac
 done
@@ -230,14 +228,9 @@ fi
 "$PRISMA" generate >/dev/null
 ok "Prisma client generated"
 
-# ---- 7. seed ----------------------------------------------------------------
-if [ "$SEED" -eq 1 ]; then
-  step "Seeding the demo member network"
-  ./node_modules/.bin/tsx prisma/seed.ts
-  ok "seed complete"
-fi
-
 # ---- done -------------------------------------------------------------------
+# No seeding step. The member table is populated by real Google sign-ins only;
+# there is deliberately no script that can inject synthetic accounts.
 printf '\n%s✔ development database ready%s\n' "$c_grn" "$c_reset"
 printf '%s  DATABASE_URL=%s%s\n' "$c_dim" "postgresql://$DB_USER:***@127.0.0.1:5432/$DB_NAME" "$c_reset"
 printf '%s  next: npm run dev%s\n\n' "$c_dim" "$c_reset"

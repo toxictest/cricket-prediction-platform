@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { LegalArticle } from "@/components/shared/legal-article";
+import { ContactLink } from "@/components/shared/contact-link";
 
 export const metadata: Metadata = {
   title: "Privacy Policy",
@@ -194,7 +195,7 @@ export default function PrivacyPage() {
                 You have the right to access, correct, export and erase your
                 personal data, and to object to processing. To exercise any of
                 these, email{" "}
-                <a href="mailto:support@example.com">support@example.com</a> from
+                <ContactLink kind="contact" warn={false} /> from
                 the address registered to your account.
               </p>
               <p>

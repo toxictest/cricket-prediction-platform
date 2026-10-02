@@ -127,15 +127,30 @@ export default async function DownloadPage() {
      ------------------------------------------------------------------ */
   const artifact = await resolveArtifact();
 
+  /*
+   * Nothing is invented when the release is missing or its manifest is
+   * incomplete. A field we cannot measure renders as MISSING rather than as a
+   * plausible-looking value, because a wrong checksum or version is worse than
+   * an obvious gap.
+   */
+  const MISSING = "not set";
+
+  const available = artifact !== null;
+
   const primaryHref = artifact?.externalUrl
     ? artifact.externalUrl
     : "/api/download";
 
   const mirrorHref = `${siteConfig.url}/downloads/${artifact?.fileName ?? appRelease.fileName}`;
 
-  const checksum = artifact?.checksum ?? appRelease.checksum;
-  const sizeLabel = artifact?.sizeLabel ?? appRelease.sizeLabel;
-  const isPlaceholder = artifact?.isPlaceholder ?? false;
+  const checksum = artifact?.checksum ?? null;
+  const sizeLabel = artifact?.sizeLabel ?? MISSING;
+  const isStub = artifact?.isStub ?? false;
+  const version = artifact?.versionName ?? siteConfig.appVersion;
+  const packageName = artifact?.packageName ?? MISSING;
+  const buildNumber = artifact?.buildNumber ?? null;
+  const minAndroid = artifact?.minAndroid ?? MISSING;
+  const architecture = artifact?.architecture ?? MISSING;
 
   return (
     <>
@@ -195,10 +210,17 @@ export default async function DownloadPage() {
                   <Package className="h-3.5 w-3.5 text-red-400" aria-hidden="true" />
                   Release artifact
                 </span>
-                <Badge variant="solid">
-                  <Sparkles aria-hidden="true" />
-                  Latest stable
-                </Badge>
+                {available ? (
+                  <Badge variant="solid">
+                    <Sparkles aria-hidden="true" />
+                    Latest stable
+                  </Badge>
+                ) : (
+                  <Badge variant="warning">
+                    <AlertTriangle aria-hidden="true" />
+                    Build pending
+                  </Badge>
+                )}
               </div>
 
               <div className="relative p-6 sm:p-7">
@@ -227,10 +249,11 @@ export default async function DownloadPage() {
                       {appRelease.name}
                     </h2>
                     <p className="mt-1.5 font-mono text-[11px] uppercase tracking-[0.14em] text-red-400">
-                      Version {appRelease.version}
+                      Version {version}
+                      {buildNumber ? ` · build ${buildNumber}` : ""}
                     </p>
-                    <p className="mt-3 max-w-lg text-[13.5px] leading-relaxed text-zinc-500">
-                      {appRelease.packageName} · build #{appRelease.buildNumber}
+                    <p className="mt-3 max-w-lg font-mono text-[12px] leading-relaxed text-zinc-500">
+                      {packageName}
                     </p>
                   </div>
                 </div>
@@ -252,20 +275,42 @@ export default async function DownloadPage() {
                 </ul>
 
                 {/* actions */}
-                <div className="relative mt-7 flex flex-col gap-3 sm:flex-row sm:items-center">
-                  <DownloadButton
-                    href={primaryHref}
-                    fileName={artifact?.fileName ?? appRelease.fileName}
-                    version={appRelease.version}
-                    sizeLabel={sizeLabel}
-                  />
-                  <InstallGuide />
-                </div>
+                {available ? (
+                  <div className="relative mt-7 flex flex-col gap-3 sm:flex-row sm:items-center">
+                    <DownloadButton
+                      href={primaryHref}
+                      fileName={artifact.fileName}
+                      version={version}
+                      sizeLabel={sizeLabel}
+                    />
+                    <InstallGuide />
+                  </div>
+                ) : (
+                  <div className="relative mt-7 rounded-md border border-amber-500/30 bg-amber-500/[0.05] px-4 py-4">
+                    <p className="flex items-center gap-2 font-mono text-[10px] font-bold uppercase tracking-wider text-amber-300">
+                      <AlertTriangle className="h-3.5 w-3.5" aria-hidden="true" />
+                      No build staged on this server
+                    </p>
+                    <p className="mt-2 text-[13px] leading-relaxed text-amber-200/80">
+                      The Download Center is wired and the access gate is
+                      enforced, but no Android package has been published yet.
+                      Place the signed release at{" "}
+                      <code className="rounded bg-black/50 px-1.5 py-0.5 font-mono text-[11px] text-amber-200">
+                        storage/apk/{appRelease.fileName}
+                      </code>{" "}
+                      and it appears here automatically, with its size and
+                      SHA-256 measured from the file.
+                    </p>
+                  </div>
+                )}
 
                 {/* mirror */}
                 <div className="relative mt-6 border-t border-white/[0.06] pt-5">
                   <p className="flex items-center gap-2 font-mono text-[9.5px] uppercase tracking-[0.16em] text-zinc-600">
-                    <FileArchive className="h-3.5 w-3.5 text-red-500/60" aria-hidden="true" />
+                    <FileArchive
+                      className="h-3.5 w-3.5 text-red-500/60"
+                      aria-hidden="true"
+                    />
                     Direct mirror (same gate)
                   </p>
                   <div className="mt-2.5">
@@ -276,13 +321,25 @@ export default async function DownloadPage() {
                   </div>
                 </div>
 
-                {/* checksum — computed from the bytes actually on disk */}
+                {/* checksum — measured from the bytes actually on disk */}
                 <div className="relative mt-3">
-                  <ChecksumRow checksum={checksum} />
+                  {checksum ? (
+                    <ChecksumRow checksum={checksum} />
+                  ) : (
+                    <div className="flex items-center gap-3 rounded border border-white/[0.07] bg-black/40 px-3.5 py-3">
+                      <ShieldCheck
+                        className="h-4 w-4 shrink-0 text-zinc-600"
+                        aria-hidden="true"
+                      />
+                      <span className="font-mono text-[11px] uppercase tracking-wider text-zinc-600">
+                        SHA-256 unavailable — no artifact staged
+                      </span>
+                    </div>
+                  )}
                 </div>
 
-                {/* placeholder notice */}
-                {isPlaceholder && (
+                {/* stub guard — catches a placeholder slipping into a release */}
+                {isStub && (
                   <div className="relative mt-4 flex items-start gap-3 rounded-md border border-red-500/35 bg-red-500/[0.06] px-4 py-3">
                     <AlertTriangle
                       className="mt-0.5 h-4 w-4 shrink-0 text-red-400"
@@ -290,15 +347,12 @@ export default async function DownloadPage() {
                     />
                     <p className="text-[12.5px] leading-relaxed text-red-200/85">
                       <strong className="font-semibold">
-                        Demo artifact detected.
+                        Suspiciously small file.
                       </strong>{" "}
-                      The staged file is the generated placeholder from{" "}
-                      <code className="rounded bg-black/50 px-1.5 py-0.5 font-mono text-[11px] text-amber-200">
-                        scripts/make-placeholder-apk.mjs
-                      </code>
-                      , not a real Android build. The download flow is fully
-                      functional — replace it with a signed release APK before
-                      going live.
+                      The staged package is {sizeLabel}, which is far below the
+                      size of any real Android build. Members who download this
+                      will not be able to install it — replace it with the signed
+                      release APK.
                     </p>
                   </div>
                 )}
@@ -335,31 +389,27 @@ export default async function DownloadPage() {
                 </h2>
 
                 <div className="mt-4">
-                  <SpecRow
-                    icon={Package}
-                    label="Package"
-                    value={appRelease.packageName}
-                  />
+                  <SpecRow icon={Package} label="Package" value={packageName} />
                   <SpecRow
                     icon={Layers}
                     label="Version"
-                    value={`${appRelease.version} (${appRelease.buildNumber})`}
+                    value={
+                      buildNumber ? `${version} (${buildNumber})` : version
+                    }
                   />
                   <SpecRow icon={HardDrive} label="Size" value={sizeLabel} />
                   <SpecRow
                     icon={Smartphone}
                     label="Min Android"
-                    value={appRelease.minAndroid}
+                    value={minAndroid}
                   />
-                  <SpecRow
-                    icon={Cpu}
-                    label="ABI"
-                    value={appRelease.architecture}
-                  />
+                  <SpecRow icon={Cpu} label="ABI" value={architecture} />
                   <SpecRow
                     icon={Calendar}
                     label="Released"
-                    value={formatDate(appRelease.releasedAt)}
+                    value={
+                      artifact?.releasedAt ? formatDate(artifact.releasedAt) : MISSING
+                    }
                   />
                   <SpecRow
                     icon={FileArchive}
@@ -479,11 +529,11 @@ export default async function DownloadPage() {
                     Back to dashboard
                   </Button>
                 </Link>
-                <a href="mailto:support@example.com">
+                <Link href="/contact">
                   <Button variant="outline" size="sm">
                     Contact support
                   </Button>
-                </a>
+                </Link>
               </div>
             </div>
           </div>

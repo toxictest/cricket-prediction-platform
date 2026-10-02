@@ -140,6 +140,15 @@ describe.skipIf(!serverUp)("access gate: guests", () => {
     expect((await res.json()).code).toBe("UNAUTHORIZED");
   });
 
+  it("GET /api/download for a guest never leaks artifact bytes", async () => {
+    const res = await raw("/api/download");
+    const body = await res.text();
+
+    // A ZIP container starts with "PK\x03\x04". A 401 body must not.
+    expect(body).not.toContain("PK\u0003\u0004");
+    expect(body).not.toMatch(/[a-f0-9]{64}/);
+  });
+
   it("POST /api/download is rejected with 405", async () => {
     const res = await raw("/api/download", { method: "POST" });
     expect(res.status).toBe(405);

@@ -124,14 +124,23 @@ export async function GET(request: NextRequest) {
   const artifact = await findArtifact();
 
   if (!artifact) {
+    // 503, not 404: the route exists and the member is authorised — the
+    // release simply has not been published. A 404 would wrongly imply the
+    // endpoint is missing.
     return NextResponse.json(
       {
         ok: false,
         error:
-          "The Android build is not staged on this server yet. Run `npm run apk:placeholder` for a demo artifact, or drop the real app-release.apk into storage/apk/.",
-        code: "NOT_FOUND",
+          "No release build has been published yet. Place the signed APK at storage/apk/, or set NEXT_PUBLIC_APK_DOWNLOAD_URL to a CDN.",
+        code: "BUILD_UNAVAILABLE",
       },
-      { status: 404, headers: { "Cache-Control": "no-store" } },
+      {
+        status: 503,
+        headers: {
+          "Cache-Control": "no-store",
+          "Retry-After": "3600",
+        },
+      },
     );
   }
 

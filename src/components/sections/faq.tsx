@@ -13,6 +13,7 @@ import { Button } from "@/components/ui/button";
 import { SectionHeading } from "@/components/effects/section-heading";
 import { Reveal } from "@/components/effects/reveal";
 import { cn } from "@/lib/utils";
+import { ContactLink } from "@/components/shared/contact-link";
 
 export function Faq() {
   return (
@@ -93,12 +94,13 @@ export function Faq() {
                       Go to Sign In
                     </Button>
                   </Link>
-                  <a
-                    href="mailto:support@example.com"
-                    className="block font-mono text-center text-[10px] uppercase tracking-[0.16em] text-zinc-600 transition-colors hover:text-red-400"
-                  >
-                    support@example.com
-                  </a>
+                  <div className="text-center">
+                    <ContactLink
+                      kind="contact"
+                      subject="FAQ follow-up"
+                      className="font-mono text-[10px] uppercase tracking-[0.16em]"
+                    />
+                  </div>
                 </div>
               </div>
 

@@ -1,0 +1,9 @@
+{
+  "packageName": "com.yourcompany.cricketterminal",
+  "versionName": "1.0.0",
+  "buildNumber": "1",
+  "minAndroid": "8.0 (Oreo / API 26)",
+  "architecture": "arm64-v8a, armeabi-v7a",
+  "releasedAt": "2026-10-02",
+  "notes": "First signed release."
+}

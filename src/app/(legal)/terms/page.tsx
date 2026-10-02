@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { LegalArticle } from "@/components/shared/legal-article";
+import { ContactLink } from "@/components/shared/contact-link";
 
 export const metadata: Metadata = {
   title: "Terms of Service",
@@ -198,13 +199,7 @@ export default function TermsPage() {
       footer={
         <p className="text-[13.5px] leading-relaxed text-zinc-400">
           Questions about these terms? Write to{" "}
-          <a
-            href="mailto:support@example.com"
-            className="text-red-400 underline-offset-4 hover:underline"
-          >
-            support@example.com
-          </a>
-          . This document is provided for platform transparency and is not a
+          <ContactLink kind="contact" warn={false} />. This document is provided for platform transparency and is not a
           substitute for jurisdiction-specific legal review.
         </p>
       }

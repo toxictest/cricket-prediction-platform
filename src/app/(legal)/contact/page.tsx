@@ -10,7 +10,9 @@ import {
   Terminal,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import { siteConfig } from "@/lib/constants";
 import { Button } from "@/components/ui/button";
+import { TriangleAlert } from "lucide-react";
 
 export const metadata: Metadata = {
   title: "Contact & Support",
@@ -25,8 +27,8 @@ const CHANNELS = [
     title: "Access & registration problems",
     description:
       "Cannot sign in, no member record after Google login, referral code not applied, or download returns 401.",
-    action: "support@example.com",
-    href: "mailto:support@example.com?subject=Access%20problem",
+    subject: "Access problem",
+    kind: "contact" as const,
     sla: "Replies within 24 hours",
     tone: "default" as const,
   },
@@ -35,8 +37,8 @@ const CHANNELS = [
     title: "Security disclosure",
     description:
       "Found a way to reach /api/download without a session, or another access-control flaw. Please report privately before disclosing publicly.",
-    action: "security@example.com",
-    href: "mailto:security@example.com?subject=Security%20disclosure",
+    subject: "Security disclosure",
+    kind: "security" as const,
     sla: "Acknowledged within 48 hours",
     tone: "warning" as const,
   },
@@ -45,8 +47,8 @@ const CHANNELS = [
     title: "Account deletion & self-exclusion",
     description:
       "Request a hard delete of your member record, or ask to be added to the suppression list so no new account can be created with your email.",
-    action: "support@example.com",
-    href: "mailto:support@example.com?subject=Self-exclusion",
+    subject: "Self-exclusion",
+    kind: "contact" as const,
     sla: "Actioned within 24 hours",
     tone: "destructive" as const,
   },
@@ -102,12 +104,12 @@ export default function ContactPage() {
                 {channel.sla}
               </p>
 
-              <a href={channel.href} className="mt-5 block">
-                <Button variant="cyber" size="sm" className="w-full">
-                  <Mail aria-hidden="true" />
-                  {channel.action}
-                </Button>
-              </a>
+              <div className="mt-5">
+                <ContactChannelButton
+                  kind={channel.kind}
+                  subject={channel.subject}
+                />
+              </div>
             </section>
           );
         })}
@@ -245,5 +247,52 @@ export default function ContactPage() {
         </aside>
       </div>
     </div>
+  );
+}
+
+/* ==========================================================================
+   CHANNEL BUTTON
+   --------------------------------------------------------------------------
+   Renders an actionable mailto button when an address is configured, and a
+   disabled button that explains what to set when it is not. The previous
+   implementation wrapped the button in `<a href="#">`, which is a dead control
+   that looks clickable and does nothing.
+   ========================================================================== */
+
+function ContactChannelButton({
+  kind,
+  subject,
+}: {
+  kind: "contact" | "security";
+  subject: string;
+}) {
+  const address =
+    kind === "security" ? siteConfig.securityEmail : siteConfig.contactEmail;
+
+  if (!address) {
+    return (
+      <Button
+        variant="outline"
+        size="sm"
+        className="w-full"
+        disabled
+        title="Set NEXT_PUBLIC_CONTACT_EMAIL to publish a real address"
+      >
+        <TriangleAlert aria-hidden="true" />
+        No address configured
+      </Button>
+    );
+  }
+
+  return (
+    <a
+      href={`mailto:${address}?subject=${encodeURIComponent(subject)}`}
+      className="block"
+    >
+      <Button variant="cyber" size="sm" className="w-full">
+        <Mail aria-hidden="true" />
+        {address}
+      </Button>
+    </a>
   );
 }

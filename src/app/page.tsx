@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import dynamic from "next/dynamic";
 import { getServerSession } from "next-auth";
+import { getCommunityStats } from "@/lib/stats";
 import { authOptions } from "@/lib/auth";
 import { Navbar } from "@/components/layout/navbar";
 import { Footer } from "@/components/layout/footer";
@@ -35,12 +36,16 @@ export default async function LandingPage() {
   // without a client-side flash.
   const session = await getServerSession(authOptions);
 
+  // Count the community from the live database. Returns an explicit offline
+  // shape rather than fabricated numbers if Postgres is unreachable.
+  const community = await getCommunityStats();
+
   return (
     <>
       <Navbar />
 
       <main id="main" className="relative flex-1">
-        <Hero />
+        <Hero community={community} />
 
         <Features />
         <About />

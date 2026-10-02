@@ -6,15 +6,12 @@ import {
   Coins,
   Download,
   Fingerprint,
-  Gauge,
   Layers,
   LineChart,
   Lock,
-  Network,
   Radar,
   Rocket,
   ShieldCheck,
-  Target,
   Trophy,
   Users,
   Zap,
@@ -35,6 +32,19 @@ export const siteConfig = {
   locale: "en_IN",
   appVersion: process.env.APK_VERSION ?? "1.0.0",
   apkFileName: process.env.APK_FILE_NAME ?? "app-release.apk",
+
+  /*
+   * Contact addresses come from the environment and default to `null` — never
+   * to a made-up address. `NEXT_PUBLIC_` is correct here because these values
+   * are rendered into public HTML for anyone to read; there is nothing secret
+   * about a support inbox. When unset, the UI says so explicitly rather than
+   * publishing an address that would bounce.
+   */
+  contactEmail: process.env.NEXT_PUBLIC_CONTACT_EMAIL?.trim() || null,
+  securityEmail:
+    process.env.NEXT_PUBLIC_SECURITY_EMAIL?.trim() ||
+    process.env.NEXT_PUBLIC_CONTACT_EMAIL?.trim() ||
+    null,
 } as const;
 
 /* ==========================================================================
@@ -188,22 +198,6 @@ export const steps: Step[] = [
   },
 ];
 
-/* ==========================================================================
-   STATS (hero + about)
-   ========================================================================== */
-
-export type Stat = {
-  label: string;
-  value: string;
-  icon: LucideIcon;
-};
-
-export const stats: Stat[] = [
-  { label: "Active Members", value: "48,200+", icon: Users },
-  { label: "Matches Modelled", value: "12.4K", icon: Target },
-  { label: "Model Accuracy", value: "78.6%", icon: Gauge },
-  { label: "Live Nodes", value: "24/7", icon: Network },
-];
 
 /* ==========================================================================
    ABOUT / PILLARS
@@ -295,17 +289,15 @@ export const faqs: FaqItem[] = [
    DOWNLOAD / APP METADATA
    ========================================================================== */
 
+/**
+ * Static description of the release. Every value that describes a *specific
+ * binary* — package name, build number, size, checksum, release date, min SDK,
+ * ABI — now comes from `resolveArtifact()` (measured from the file on disk plus
+ * `storage/apk/release.json`). Nothing here is invented, and nothing here can
+ * drift out of sync with the bytes actually served.
+ */
 export const appRelease = {
   name: "Android Terminal APK",
-  packageName: "com.cricketprediction.terminal",
-  version: siteConfig.appVersion,
-  buildNumber: "1042",
-  sizeLabel: "18.4 MB",
-  minAndroid: "8.0 (Oreo / API 26)",
-  architecture: "arm64-v8a · armeabi-v7a",
-  releasedAt: "2026-09-18",
-  checksum:
-    "9f2c41ab77de05b6c8a3e1d94f0b27cc5e6a18d3f47b920ae1c05d6784bf3a21",
   fileName: siteConfig.apkFileName,
   features: [
     "Full live analytics terminal",

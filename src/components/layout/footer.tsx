@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { Github, Mail, ShieldCheck, Terminal, Twitter } from "lucide-react";
+import { Mail, ShieldCheck, Terminal } from "lucide-react";
 import { footerNav, siteConfig } from "@/lib/constants";
 import { Badge } from "@/components/ui/badge";
 import { Logo } from "@/components/layout/navbar";
@@ -75,9 +75,18 @@ export function Footer() {
 
             <div className="mt-6 flex items-center gap-2">
               {[
-                { icon: Github, label: "GitHub", href: "#" },
-                { icon: Twitter, label: "X", href: "#" },
-                { icon: Mail, label: "Email", href: "mailto:support@example.com" },
+                // Only real destinations. A link to "#" is a dead control that
+                // looks interactive and does nothing.
+                ...(siteConfig.contactEmail
+                  ? [
+                      {
+                        icon: Mail,
+                        label: "Email",
+                        href: `mailto:${siteConfig.contactEmail}`,
+                      },
+                    ]
+                  : []),
+                { icon: Terminal, label: "Status", href: "/api/health" },
               ].map(({ icon: Icon, label, href }) => (
                 <a
                   key={label}

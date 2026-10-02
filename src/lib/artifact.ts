@@ -1,10 +1,14 @@
 import { createHash } from "crypto";
 import { createReadStream } from "fs";
-import { stat } from "fs/promises";
+import { readFile, stat } from "fs/promises";
 import path from "path";
 
 /* ==========================================================================
    ARTIFACT RESOLUTION
+   --------------------------------------------------------------------------
+   Everything the Download Center displays about the build is derived from the
+   real file on disk plus an optional `release.json` manifest. Nothing about a
+   release is hard-coded in the source tree.
    ========================================================================== */
 
 const APK_FILE_NAME = process.env.APK_FILE_NAME ?? "app-release.apk";
@@ -19,23 +23,62 @@ const SEARCH_PATHS = [
   path.join(process.cwd(), "public", "downloads", APK_FILE_NAME),
 ];
 
+/**
+ * Optional sidecar describing the build. Only *descriptive* fields are read
+ * from here — never the checksum, size or dates, which are all measured from
+ * the file itself so they cannot drift out of sync with the bytes shipped.
+ *
+ * Placed next to the APK so a release is two files: the binary and its label.
+ */
+const MANIFEST_PATH = path.join(process.cwd(), "storage", "apk", "release.json");
+
+/** Shape of `storage/apk/release.json`. Every field is optional. */
+export type ReleaseManifest = {
+  packageName?: string;
+  buildNumber?: string;
+  versionName?: string;
+  minAndroid?: string;
+  architecture?: string;
+  /** ISO date. Overrides the file's mtime for display. */
+  releasedAt?: string;
+  notes?: string;
+};
+
 export type ArtifactInfo = {
   fileName: string;
   filePath: string;
-  /** Exact byte length. */
+  /** Exact byte length, measured from disk. */
   sizeBytes: number;
-  /** Human label, e.g. "18.4 MB" — or "2.1 KB" for the demo placeholder. */
+  /** Human label derived from `sizeBytes`, e.g. "18.4 MB". */
   sizeLabel: string;
   /** Lower-case hex SHA-256 of the artifact on disk. */
   checksum: string;
-  /** False when the file looks like the generated demo placeholder. */
-  isPlaceholder: boolean;
+  /** ISO date the build was released — file mtime, or the manifest override. */
+  releasedAt: string;
+  /**
+   * True when the file is implausibly small for a real Android package
+   * (< 64 KB). A genuine release APK is megabytes. This is a guard against
+   * accidentally shipping a stub, not a description of the current file.
+   */
+  isStub: boolean;
+  /** Descriptive metadata, from `release.json` when present. */
+  packageName: string | null;
+  buildNumber: string | null;
+  versionName: string | null;
+  minAndroid: string | null;
+  architecture: string | null;
+  notes: string | null;
+  /** True when the metadata above came from a real manifest. */
+  hasManifest: boolean;
   /** True when an external CDN URL is configured instead. */
+  isExternal: boolean;
+  /** Set only when `NEXT_PUBLIC_APK_DOWNLOAD_URL` points somewhere else. */
   externalUrl: string | null;
 };
 
-/** Checksums are expensive (18 MB hash); cache per process. */
-let cached: Omit<ArtifactInfo, "externalUrl"> | null = null;
+/** Checksums are expensive (tens of MB to hash); cache per process. */
+let cached: ArtifactInfo | null = null;
+let cacheKey: string | null = null;
 
 function humanSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -53,20 +96,44 @@ async function sha256File(filePath: string): Promise<string> {
   });
 }
 
+/** Reads `release.json`. A malformed manifest is ignored, never fatal. */
+async function readManifest(): Promise<ReleaseManifest | null> {
+  try {
+    const raw = await readFile(MANIFEST_PATH, "utf8");
+    const parsed: unknown = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      console.warn("[artifact] release.json is not an object — ignoring");
+      return null;
+    }
+    return parsed as ReleaseManifest;
+  } catch {
+    // Absent in most checkouts. That is a valid state, not an error.
+    return null;
+  }
+}
+
+function clean(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
 /**
- * Locates the distributable and computes its real SHA-256.
+ * Locates the distributable and derives everything about it from the real file.
  *
- * Deriving the checksum from the bytes on disk (rather than hard-coding it in
- * `lib/constants.ts`) means the hash displayed in the Download Center is always
- * the hash of the file the user actually receives. Drop in a new build and the
- * page updates itself.
+ * Deriving the checksum and size from the bytes on disk means the values shown
+ * in the Download Center are always the values of the file the member actually
+ * receives. Drop in a new build and the page updates itself — there is no
+ * constant to forget.
  *
- * Returns `null` when nothing is staged; callers fall back to static metadata.
+ * Returns `null` when nothing is staged. Callers must render an explicit
+ * "not available" state; they must never invent a version, size or hash.
  */
 export async function resolveArtifact(): Promise<ArtifactInfo | null> {
   const externalUrl = process.env.NEXT_PUBLIC_APK_DOWNLOAD_URL?.trim() || null;
 
-  if (cached) {
+  // Only the local files affect the cache key; the CDN URL is applied on read.
+  if (cached && cacheKey !== externalUrl) {
     return { ...cached, externalUrl };
   }
 
@@ -75,10 +142,10 @@ export async function resolveArtifact(): Promise<ArtifactInfo | null> {
       const info = await stat(candidate);
       if (!info.isFile() || info.size === 0) continue;
 
-      const checksum = await sha256File(candidate);
-
-      // The generated demo archive is ~1.7 KB; a real release is megabytes.
-      const isPlaceholder = info.size < 64 * 1024;
+      const [checksum, manifest] = await Promise.all([
+        sha256File(candidate),
+        readManifest(),
+      ]);
 
       cached = {
         fileName: path.basename(candidate),
@@ -86,31 +153,62 @@ export async function resolveArtifact(): Promise<ArtifactInfo | null> {
         sizeBytes: info.size,
         sizeLabel: humanSize(info.size),
         checksum,
-        isPlaceholder,
+        releasedAt: clean(manifest?.releasedAt) ?? info.mtime.toISOString(),
+        isStub: info.size < 64 * 1024,
+        packageName: clean(manifest?.packageName),
+        buildNumber: clean(manifest?.buildNumber),
+        versionName: clean(manifest?.versionName),
+        minAndroid: clean(manifest?.minAndroid),
+        architecture: clean(manifest?.architecture),
+        notes: clean(manifest?.notes),
+        hasManifest: manifest !== null,
+        isExternal: false,
+        externalUrl,
       };
+      cacheKey = externalUrl;
 
-      return { ...cached, externalUrl };
+      return cached;
     } catch {
       // ENOENT on this path — try the next one.
     }
   }
 
-  return externalUrl ? { ...externalFallback(externalUrl), externalUrl } : null;
-}
+  // No local bytes. If a CDN URL is configured we can still describe the
+  // release, but size and checksum are genuinely unknown and must say so.
+  if (externalUrl) {
+    const manifest = await readManifest();
+    cached = {
+      fileName: APK_FILE_NAME,
+      filePath: externalUrl,
+      sizeBytes: 0,
+      sizeLabel: "not measured",
+      checksum: "not measured",
+      releasedAt: clean(manifest?.releasedAt) ?? "",
+      isStub: false,
+      packageName: clean(manifest?.packageName),
+      buildNumber: clean(manifest?.buildNumber),
+      versionName: clean(manifest?.versionName),
+      minAndroid: clean(manifest?.minAndroid),
+      architecture: clean(manifest?.architecture),
+      notes: clean(manifest?.notes),
+      hasManifest: manifest !== null,
+      isExternal: true,
+      externalUrl,
+    };
+    cacheKey = externalUrl;
+    return cached;
+  }
 
-/** Metadata used when only a CDN URL is configured (no local bytes to hash). */
-function externalFallback(externalUrl: string): Omit<ArtifactInfo, "externalUrl"> {
-  return {
-    fileName: APK_FILE_NAME,
-    filePath: externalUrl,
-    sizeBytes: 0,
-    sizeLabel: "—",
-    checksum: "unavailable (remote artifact)",
-    isPlaceholder: false,
-  };
+  cached = null;
+  cacheKey = null;
+  return null;
 }
 
 /** Clears the memoised lookup — call after replacing the APK in dev. */
 export function invalidateArtifactCache(): void {
   cached = null;
+  cacheKey = null;
 }
+
+/** Absolute path the manifest is expected at, for error messages. */
+export const RELEASE_MANIFEST_PATH = MANIFEST_PATH;

@@ -4,28 +4,26 @@
   "private": true,
   "description": "Cricket Prediction Community Platform \u2014 cyberpunk-themed Next.js 15 application with Google authentication, referral system and gated Android APK distribution.",
   "scripts": {
-    "dev": "next dev",
     "build": "prisma generate && next build",
-    "vercel-build": "prisma generate && prisma migrate deploy && next build",
-    "start": "next start",
-    "lint": "next lint",
-    "typecheck": "tsc --noEmit",
-    "test": "vitest",
-    "test:run": "vitest run",
-    "test:unit": "vitest run tests/referral.test.ts tests/utils.test.ts tests/artifact.test.ts",
-    "test:integration": "vitest run tests/provisioning.test.ts tests/http-contract.test.ts",
-    "verify": "npm run typecheck && npm run lint && npm run test:run && npm run build",
-    "postinstall": "prisma generate",
-    "db:setup": "bash scripts/setup-dev-db.sh --seed",
-    "db:setup:reset": "bash scripts/setup-dev-db.sh --reset --seed",
-    "db:generate": "prisma generate",
-    "db:push": "prisma db push",
-    "db:migrate": "prisma migrate dev",
     "db:deploy": "prisma migrate deploy",
-    "db:studio": "prisma studio",
-    "db:seed": "tsx prisma/seed.ts",
+    "db:generate": "prisma generate",
+    "db:migrate": "prisma migrate dev",
+    "db:push": "prisma db push",
     "db:reset": "prisma migrate reset --force",
-    "apk:placeholder": "node scripts/make-placeholder-apk.mjs"
+    "db:setup": "bash scripts/setup-dev-db.sh",
+    "db:setup:reset": "bash scripts/setup-dev-db.sh --reset",
+    "db:studio": "prisma studio",
+    "dev": "next dev",
+    "lint": "next lint",
+    "postinstall": "prisma generate",
+    "start": "next start",
+    "test": "vitest",
+    "test:integration": "vitest run tests/provisioning.test.ts tests/http-contract.test.ts",
+    "test:run": "vitest run",
+    "test:unit": "vitest run tests/referral.test.ts tests/utils.test.ts tests/artifact.test.ts tests/stats.test.ts",
+    "typecheck": "tsc --noEmit",
+    "vercel-build": "prisma generate && prisma migrate deploy && next build",
+    "verify": "npm run typecheck && npm run lint && npm run test:run && npm run build"
   },
   "dependencies": {
     "@prisma/client": "6.19.3",
@@ -72,8 +70,5 @@
   },
   "engines": {
     "node": ">=18.18.0"
-  },
-  "prisma": {
-    "seed": "tsx prisma/seed.ts"
   }
 }

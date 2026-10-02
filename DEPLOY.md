@@ -109,6 +109,8 @@ Add these in the Vercel *Environment Variables* panel. Tick **Production**,
 | `REFERRAL_CODE_LENGTH` | `8` | No |
 | `REFERRAL_CODE_PREFIX` | `CRC` | No |
 | `NEXT_PUBLIC_APK_DOWNLOAD_URL` | *(leave empty)* | No |
+| `NEXT_PUBLIC_CONTACT_EMAIL` | your real support address | **Yes for a public site** |
+| `NEXT_PUBLIC_SECURITY_EMAIL` | your security address | No |
 
 Do **not** set `SHADOW_DATABASE_URL`. That variable is only used by
 `prisma migrate dev` on a local machine; Neon and Vercel do not need it.
@@ -142,18 +144,15 @@ Click **Deploy**. The first build takes roughly 1–3 minutes and does this:
 When it finishes, open the URL. You should see the landing page with the
 fire-particle background.
 
-### Optional — load the demo dataset
+### The database starts empty — that is correct
 
-The seed script creates 7 members, 6 referrals and 11 download logs. Run it
-**once** from your local machine against Neon:
+There is no seed script. Every row in `users` comes from a real Google sign-in,
+which is the point: the member count on the landing page and the referral graph
+on the dashboard are measurements, not fixtures.
 
-```bash
-cd cricket-prediction-platform
-DATABASE_URL="<your-neon-url>" npx tsx prisma/seed.ts
-```
-
-The script is idempotent (it upserts on `google_id`), so running it twice is
-safe — it refreshes rows in place rather than duplicating them.
+After your first sign-in, `/` should read **1 member, 0 referred** and the
+dashboard should show a real referral code. If the counts stay at zero, the
+sign-in did not complete — check the Vercel function logs.
 
 ---
 
@@ -240,7 +239,7 @@ Preview deployments are created for other branches and pull requests.
 | Item | Reality |
 |---|---|
 | Custom domain | The `*.vercel.app` subdomain is free. A custom domain is free to *host* but you pay a registrar for the name. |
-| Real APK | `public/downloads/app-release.apk` is a 1.7 KB placeholder ZIP, not an installable Android build. Replace it with a signed release APK before promoting the download. |
+| Real APK | No APK ships in the repository. Until you stage one at `storage/apk/app-release.apk`, `/download` shows "No build staged" and `/api/download` returns `503`. See README §9. |
 | Horizontal rate limiting | `/api/referral` uses an in-memory limiter. On serverless, every warm instance keeps its own counters, so the effective limit is roughly *N instances × 30 requests*. Acceptable here; use Upstash Redis if it ever matters. |
 | Neon idle | The free Neon compute scales to zero after ~5 minutes idle. The first request afterwards takes ~1 s to wake. |
 

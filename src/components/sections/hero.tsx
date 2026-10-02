@@ -5,13 +5,17 @@ import { motion, useReducedMotion } from "framer-motion";
 import {
   ArrowRight,
   ChevronDown,
+  Database,
+  Download,
   Play,
   ShieldCheck,
   Smartphone,
   Sparkles,
+  Users,
   Zap,
 } from "lucide-react";
-import { siteConfig, stats } from "@/lib/constants";
+import { siteConfig } from "@/lib/constants";
+import { formatCount, type CommunityStats } from "@/lib/stats";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { TerminalWindow, type TerminalLine } from "@/components/effects/terminal-window";
@@ -68,8 +72,33 @@ const itemVariants = {
   },
 };
 
-export function Hero() {
+/**
+ * The stat strip is fed by `getCommunityStats()` on the server, so every number
+ * is counted from PostgreSQL at request time. `null` renders as an em dash:
+ * "no members yet" and "the database is unreachable" are different facts and
+ * the UI must not blur them into a zero.
+ */
+export function Hero({ community }: { community: CommunityStats }) {
   const reduce = useReducedMotion();
+
+  const tiles = [
+    { label: "Members", value: formatCount(community.members), icon: Users },
+    {
+      label: "Referred",
+      value: formatCount(community.referrals),
+      icon: Sparkles,
+    },
+    {
+      label: "Downloads",
+      value: formatCount(community.downloads),
+      icon: Download,
+    },
+    {
+      label: "DB latency",
+      value: community.latencyMs === null ? "—" : `${community.latencyMs} ms`,
+      icon: Database,
+    },
+  ];
 
   return (
     <section
@@ -205,7 +234,7 @@ export function Hero() {
               variants={reduce ? undefined : itemVariants}
               className="mt-12 grid w-full grid-cols-2 gap-x-6 gap-y-5 border-t border-white/[0.07] pt-8 sm:grid-cols-4"
             >
-              {stats.map(({ label, value, icon: Icon }) => (
+              {tiles.map(({ label, value, icon: Icon }) => (
                 <div key={label} className="group">
                   <dt className="flex items-center gap-1.5 font-mono text-[9px] uppercase tracking-[0.16em] text-zinc-600">
                     <Icon
@@ -268,9 +297,18 @@ export function Hero() {
             {/* meta row under the terminal */}
             <div className="mt-5 grid grid-cols-3 gap-3">
               {[
-                { k: "Uptime", v: "99.98%" },
-                { k: "Avg latency", v: "42 ms" },
-                { k: "Build", v: "#1042" },
+                {
+                  k: "Database",
+                  v: community.online ? "online" : "offline",
+                },
+                {
+                  k: "Latency",
+                  v:
+                    community.latencyMs === null
+                      ? "—"
+                      : `${community.latencyMs} ms`,
+                },
+                { k: "App version", v: siteConfig.appVersion },
               ].map(({ k, v }) => (
                 <div
                   key={k}

@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { LegalArticle } from "@/components/shared/legal-article";
+import { ContactLink } from "@/components/shared/contact-link";
 
 export const metadata: Metadata = {
   title: "Responsible Play",
@@ -174,7 +175,7 @@ export default function ResponsiblePlayPage() {
             <p>
               If you would like your membership closed so that you cannot access
               the terminal or its models, email{" "}
-              <a href="mailto:support@example.com">support@example.com</a> with
+              <ContactLink kind="contact" warn={false} /> with
               the subject <strong>&ldquo;Self-exclusion&rdquo;</strong>. The
               request is actioned within 24 hours, the account is hard-deleted,
               and the associated email address is added to a suppression list so

@@ -31,7 +31,6 @@ Legend: 🎨 UI · ⚙️ logic · 🔒 security-relevant · 📄 docs/config
 |---|---|
 | ⚙️ `prisma/schema.prisma` | Two models. `User` (id, googleId, name, email, image, referralCode, referredById, lastLoginAt, timestamps) and `DownloadLog` (version, platform, ipHash, userAgent). PascalCase in TS, `snake_case` in Postgres via `@map`. Five indexes, cascade/set-null rules. |
 | ⚙️ `prisma/migrations/20261002122519_init/migration.sql` | The applied DDL. Use `prisma migrate deploy` in CI rather than `db push`. |
-| ⚙️ `prisma/seed.ts` | Seven-member demo network with a referrer→invitee graph and 11 download-log rows. Idempotent: re-running upserts by `googleId`. Refuses to run when `NODE_ENV=production`. |
 
 ---
 
@@ -40,7 +39,6 @@ Legend: 🎨 UI · ⚙️ logic · 🔒 security-relevant · 📄 docs/config
 | File | Purpose |
 |---|---|
 | ⚙️ `scripts/setup-dev-db.sh` | **One-command environment bootstrap.** Finds or installs PostgreSQL, initialises a cluster if none exists, creates the role/database/shadow-database, generates `.env` with a fresh `NEXTAUTH_SECRET`, applies migrations, optionally seeds. Idempotent; `--reset` drops first. Deliberately calls `./node_modules/.bin/prisma` rather than `npx prisma`, which would silently resolve to Prisma 7 and reject this schema. |
-| ⚙️ `scripts/make-placeholder-apk.mjs` | Zero-dependency ZIP writer. Emits a valid, compressed container holding `README.txt`, `BUILD_INFO.json` and `NOT_AN_INSTALLABLE_BUILD.txt` so the gate, audit log and stream path are exercisable before a real Android build exists. Not installable — and labelled as such everywhere. |
 
 ---
 
@@ -111,9 +109,11 @@ Legend: 🎨 UI · ⚙️ logic · 🔒 security-relevant · 📄 docs/config
 
 | File | Purpose |
 |---|---|
+| ⚙️ `src/components/shared/contact-link.tsx` | Renders a real contact address or an explicit "email not configured" state. Exists so no page can fall back to the reserved `example.com` domain, which silently swallows mail while looking like a live support channel. |
 | ⚙️ `src/lib/prisma.ts` | HMR-safe singleton client. Without it, dev-mode reloading opens a new pool per request and exhausts `max_connections`. |
 | ⚙️ `src/lib/artifact.ts` | Locates the APK (`storage/apk` → `public/downloads` → CDN) and **computes its SHA-256 from the bytes on disk**, so the published checksum always matches the file the member receives. Detects the demo placeholder by size. Memoised per process. |
-| ⚙️ `src/lib/constants.ts` | Single source of truth for content: nav, features, protocol steps, pillars, stats, FAQ, footer, app-release metadata, membership tiers. |
+| ⚙️ `src/lib/constants.ts` | Single source of truth for *content*: nav, features, protocol steps, pillars, FAQ, footer, membership tiers. Contains no measured value — counts, latency, package identity, size and checksum all come from `stats.ts` / `artifact.ts` at request time. |
+| ⚙️ `src/lib/stats.ts` | **Real community numbers.** Counts members, referrals and downloads from PostgreSQL, measures query latency live on every request (counts are cached 30 s; latency never is) and returns an explicit offline shape when the database is unreachable — so the landing page renders dashes instead of invented figures. |
 | ⚙️ `src/lib/utils.ts` | `cn` (clsx + tailwind-merge), `formatDate`, `formatDateTime`, `timeAgo`, `maskEmail`, `absoluteUrl`, `initials`, `clamp`, `uid`. |
 | ⚙️ `src/types/index.ts` | Shared domain types, the `ApiResponse<T>` envelope and its error-code union. |
 
@@ -202,7 +202,8 @@ Legend: 🎨 UI · ⚙️ logic · 🔒 security-relevant · 📄 docs/config
 |---|---|
 | 📄 `README.md` | 18-section guide: features, stack, quick start, env vars, Google OAuth, the developer channel, database, artifact handling, full file structure, routes/API, **how the gate works**, design system, deployment (Vercel + Docker + checklist), security, scripts, troubleshooting, and the verification log. |
 | 📄 `FILE_MANIFEST.md` | This file. |
-| 📄 `storage/apk/README.md` | Explains the private staging directory and why it is preferred over `public/`. |
+| 📄 `storage/apk/README.md` | Explains the private staging directory, why it is preferred over `public/`, and the `release.json` label format. |
+| 📄 `storage/apk/release.example.json` | Template for the optional build label. Only descriptive fields are read from it — size, SHA-256 and date are always measured from the APK itself. |
 | 📄 `docs/screenshots/*.png` | 21 captures taken from the running application: landing sections, auth, the guest gate, the unlocked Download Center, dashboard, the SSO fire handshake in three stages (early / full log / ACCESS GRANTED), the arrival burst, and mobile widths. |
 
 ---
@@ -221,16 +222,14 @@ Legend: 🎨 UI · ⚙️ logic · 🔒 security-relevant · 📄 docs/config
 | `npm run test:unit` | Unit tier only — no DB, no server, ~0.6 s |
 | `npm run test:integration` | DB + HTTP tiers |
 | `npm run verify` | `typecheck && lint && test:run && build` |
-| `npm run db:setup` | **Bootstrap Postgres + migrate + seed** |
+| `npm run db:setup` | **Bootstrap Postgres + apply migrations** (inserts nothing) |
 | `npm run db:setup:reset` | Same, dropping databases first |
 | `npm run db:generate` | `prisma generate` |
 | `npm run db:push` | `prisma db push` |
 | `npm run db:migrate` | `prisma migrate dev` |
 | `npm run db:deploy` | `prisma migrate deploy` |
 | `npm run db:studio` | `prisma studio` |
-| `npm run db:seed` | `tsx prisma/seed.ts` |
-| `npm run db:reset` | `prisma migrate reset --force` |
-| `npm run apk:placeholder` | Generate the demo artifact |
+| `npm run db:reset` | `prisma migrate reset --force` (no data inserted) |
 
 ---
 
