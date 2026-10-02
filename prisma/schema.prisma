@@ -1,0 +1,97 @@
+// =============================================================================
+//  Cricket Prediction Community Platform — Prisma Schema
+//  Provider: PostgreSQL
+// =============================================================================
+//  Commands:
+//    npx prisma generate      -> regenerate the typed client
+//    npx prisma db push       -> sync schema without a migration (prototyping)
+//    npx prisma migrate dev   -> create + apply a versioned migration (dev)
+//    npx prisma migrate deploy-> apply pending migrations (CI / production)
+//    npx prisma studio        -> browse the data in a GUI
+//
+//  Convention: models are PascalCase in the client, while the underlying
+//  tables and columns are snake_case. That keeps TypeScript idiomatic and SQL
+//  idiomatic at the same time — you never have to quote identifiers.
+// =============================================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider          = "postgresql"
+  url               = env("DATABASE_URL")
+  shadowDatabaseUrl = env("SHADOW_DATABASE_URL")
+}
+
+/// A registered member of the community.
+/// Created on first sign-in via the NextAuth `signIn` callback.
+model User {
+  id String @id @default(cuid())
+
+  /// Google `sub` claim — the stable, immutable identifier from the OAuth
+  /// provider. Namespaced `demo_*` values are used by the credentials
+  /// provider in local development.
+  googleId String @unique @map("google_id")
+
+  /// Display name pulled from the Google profile.
+  name String @db.VarChar(120)
+
+  /// Primary email address, lower-cased before persisting.
+  email String @unique @db.VarChar(254)
+
+  /// Google profile picture URL (lh3.googleusercontent.com).
+  image String? @db.Text
+
+  /// Auto-generated, collision-free referral code, e.g. "CRC-7K2M9QX4".
+  referralCode String @unique @map("referral_code") @db.VarChar(32)
+
+  /// The member whose code was used during sign-up. Null for organic sign-ups.
+  referredById String? @map("referred_by_id")
+
+  /// Timestamp of the most recent successful sign-in.
+  lastLoginAt DateTime? @map("last_login_at") @db.Timestamptz(3)
+
+  /// When the account was activated.
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  // ---- relations ----
+  referredBy User?  @relation("UserReferrals", fields: [referredById], references: [id], onDelete: SetNull, onUpdate: Cascade)
+  referrals  User[] @relation("UserReferrals")
+
+  downloadLogs DownloadLog[]
+
+  @@index([referredById])
+  @@index([createdAt])
+  @@index([email])
+  @@map("users")
+}
+
+/// Immutable audit trail of every APK download performed by an authenticated
+/// member. Cascades away when the owning account is hard-deleted.
+model DownloadLog {
+  id String @id @default(cuid())
+
+  userId String @map("user_id")
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+
+  /// Semantic version of the distributed build, e.g. "1.0.0".
+  version String @default("1.0.0") @db.VarChar(24)
+
+  /// Target platform of the artifact.
+  platform String @default("android") @db.VarChar(24)
+
+  /// SHA-256 of (secret + ip), truncated. Lets us rate-limit abuse without
+  /// ever persisting the raw IP address.
+  ipHash String? @map("ip_hash") @db.VarChar(64)
+
+  userAgent String? @map("user_agent") @db.VarChar(300)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@index([userId, createdAt])
+  @@index([createdAt])
+  @@map("download_logs")
+}
