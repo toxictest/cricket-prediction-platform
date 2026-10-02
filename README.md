@@ -703,6 +703,11 @@ evaluated at collection time, so a flag set inside a hook always reads as
 
 ## 14. Deployment
 
+> **Deploying to a free public URL?** See **[DEPLOY.md](DEPLOY.md)** — a
+> step-by-step guide for Vercel Hobby + Neon Postgres, including every
+> environment variable, the Google OAuth redirect setup, and a
+> post-deploy smoke test.
+
 ### Vercel (recommended)
 
 1. Push the repository to GitHub and import it in Vercel.
