@@ -63,6 +63,11 @@ model User {
 
   downloadLogs DownloadLog[]
 
+  wallet             Wallet?
+  paymentRequests    PaymentRequest[]
+  withdrawalRequests WithdrawalRequest[]
+  transactions       Transaction[]
+
   @@index([referredById])
   @@index([createdAt])
   @@index([email])
@@ -94,4 +99,299 @@ model DownloadLog {
   @@index([userId, createdAt])
   @@index([createdAt])
   @@map("download_logs")
+}
+
+// ====================== ENUMS ======================
+
+/// Back-office permission groups. Every admin route must check these server-side.
+enum Role {
+  SUPER_ADMIN
+  SCORE_ADMIN
+  PAYMENT_ADMIN
+  SUPPORT_ADMIN
+}
+
+/// Review state of a deposit claim.
+enum PaymentStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+/// Review state of a withdrawal request.
+enum WithdrawalStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+/// Lifecycle of a match.
+enum MatchStatus {
+  UPCOMING
+  LIVE
+  COMPLETED
+}
+
+/// Kinds of wallet movement recorded in the transactions ledger.
+enum TransactionType {
+  DEPOSIT
+  WITHDRAWAL
+  WINNING
+  REFUND
+  ADMIN_ADJUST
+}
+
+// ====================== MODELS ======================
+
+/// Back-office operator account. Separate from `User`: admins never sign in
+/// with Google. Admin authentication is not implemented yet.
+model AdminUser {
+  id String @id @default(cuid())
+
+  /// Login identifier, lower-cased before persisting.
+  email String @unique @db.VarChar(254)
+
+  /// Password hash only. The raw password is never stored.
+  passwordHash String @map("password_hash")
+
+  name String
+
+  /// Permission groups. Enforced server-side on every admin route.
+  roles Role[] @default([])
+
+  /// Deactivated admins keep their history but cannot sign in.
+  isActive Boolean @default(true) @map("is_active")
+
+  lastLoginAt DateTime? @map("last_login_at") @db.Timestamptz(3)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  // ---- relations ----
+  reviewedPayments    PaymentRequest[]    @relation("PaymentReviewedBy")
+  reviewedWithdrawals WithdrawalRequest[] @relation("WithdrawalReviewedBy")
+  liveScoresUpdated   LiveScore[]
+  sessions            AdminSession[]
+
+  @@map("admin_users")
+}
+
+/// One row per admin login. The admin cookie holds a signed JWT that points at
+/// this row, so logout and expiry are enforced on the server, not only in the
+/// browser.
+model AdminSession {
+  /// Random UUID. Not a cuid, so it cannot be guessed from creation time.
+  id String @id
+
+  adminId String @map("admin_id")
+
+  /// Keyed hash of the client IP (HMAC). Never the raw address.
+  ipHash String? @map("ip_hash") @db.VarChar(64)
+
+  userAgent String? @map("user_agent") @db.VarChar(300)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  /// Absolute expiry. Sessions do not slide.
+  expiresAt DateTime @map("expires_at") @db.Timestamptz(3)
+
+  /// Set on logout. A revoked session is rejected even if its JWT is still valid.
+  revokedAt DateTime? @map("revoked_at") @db.Timestamptz(3)
+
+  // ---- relations ----
+  admin AdminUser @relation(fields: [adminId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+
+  @@index([adminId])
+  @@index([expiresAt])
+  @@map("admin_sessions")
+}
+
+/// One wallet per member. The cached balances must be updated in the same
+/// database transaction as the matching row in `transactions`.
+model Wallet {
+  id String @id @default(cuid())
+
+  userId String @unique @map("user_id")
+
+  /// Cached balance from deposits.
+  depositBalance Int @default(0) @map("deposit_balance")
+
+  /// Cached balance from winnings.
+  winningBalance Int @default(0) @map("winning_balance")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  // ---- relations ----
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("wallets")
+}
+
+/// A member's claim that they paid by UPI, reviewed by a PAYMENT_ADMIN.
+model PaymentRequest {
+  id String @id @default(cuid())
+
+  userId String @map("user_id")
+
+  /// Amount the member says they paid, in INR.
+  amount Int
+
+  tokensToCredit Int @map("tokens_to_credit")
+
+  /// UPI/bank reference number. Globally unique: one payment backs one claim.
+  utrNumber String @unique @map("utr_number")
+
+  /// Location of the proof-of-payment image. Should be private storage.
+  screenshotUrl String @map("screenshot_url")
+
+  status PaymentStatus @default(PENDING)
+
+  reviewedById String? @map("reviewed_by_id")
+
+  reviewNote String? @map("review_note")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  // ---- relations ----
+  user       User       @relation(fields: [userId], references: [id])
+  reviewedBy AdminUser? @relation("PaymentReviewedBy", fields: [reviewedById], references: [id])
+
+  /// One member's own claims, newest first, and the "how many are pending"
+  /// check that runs before a new claim is accepted.
+  @@index([userId, createdAt])
+  /// The review queue, filtered by status and read in filing order.
+  @@index([status, createdAt])
+  @@map("payment_requests")
+}
+
+/// A member's request to move winnings to a UPI ID, reviewed by a PAYMENT_ADMIN.
+model WithdrawalRequest {
+  id String @id @default(cuid())
+
+  userId String @map("user_id")
+
+  /// Amount requested, in INR.
+  amount Int
+
+  upiId String @map("upi_id")
+
+  status WithdrawalStatus @default(PENDING)
+
+  reviewedById String? @map("reviewed_by_id")
+
+  reviewNote String? @map("review_note")
+
+  /// Bank or UPI reference of the outgoing payout, filled in by the admin.
+  adminUtr String? @map("admin_utr")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  // ---- relations ----
+  user       User       @relation(fields: [userId], references: [id])
+  reviewedBy AdminUser? @relation("WithdrawalReviewedBy", fields: [reviewedById], references: [id])
+
+  @@map("withdrawal_requests")
+}
+
+/// A cricket fixture. Status moves UPCOMING -> LIVE -> COMPLETED.
+model Match {
+  id String @id @default(cuid())
+
+  title String
+
+  teamA String @map("team_a")
+
+  teamB String @map("team_b")
+
+  startTime DateTime @map("start_time") @db.Timestamptz(3)
+
+  status MatchStatus @default(UPCOMING)
+
+  /// Optional QR image URL for this match.
+  qrCodeUrl String? @map("qr_code_url")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  // ---- relations ----
+  liveScore LiveScore?
+
+  @@map("matches")
+}
+
+/// Current scoreboard for one match. One row per match, overwritten on update.
+model LiveScore {
+  id String @id @default(cuid())
+
+  matchId String @unique @map("match_id")
+
+  /// Display string such as "182/4". Structured numbers are recommended (see docs/SYSTEM_DESIGN.md).
+  teamAScore String @default("0/0") @map("team_a_score")
+
+  /// Display string such as "165/9".
+  teamBScore String @default("0/0") @map("team_b_score")
+
+  /// Display string such as "16.3".
+  currentOver String @default("0.0") @map("current_over")
+
+  batsmanStats Json? @map("batsman_stats")
+
+  bowlerStats Json? @map("bowler_stats")
+
+  lastUpdatedById String? @map("last_updated_by_id")
+
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  // ---- relations ----
+  match         Match      @relation(fields: [matchId], references: [id], onDelete: Cascade)
+  lastUpdatedBy AdminUser? @relation(fields: [lastUpdatedById], references: [id])
+
+  @@map("live_scores")
+}
+
+/// Ledger of wallet movements. Intended to be append-only; enforce with DB grants.
+model Transaction {
+  id String @id @default(cuid())
+
+  userId String @map("user_id")
+
+  type TransactionType
+
+  /// Signed movement in tokens: positive for a credit, negative for a debit.
+  /// Never zero (DB CHECK). The wallet service sets the sign from the operation.
+  amount Int
+
+  /// Which balance moved.
+  balanceType BalanceType @map("balance_type")
+
+  /// The affected balance right after this movement (audit snapshot).
+  balanceAfter Int @map("balance_after")
+
+  description String?
+
+  /// ID of the related record (payment, withdrawal, match). Not a foreign key.
+  /// Unique per user and type, so one payment or withdrawal is applied once.
+  referenceId String? @map("reference_id")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  // ---- relations ----
+  user User @relation(fields: [userId], references: [id])
+
+  @@unique([userId, type, referenceId])
+  @@index([userId, createdAt])
+  @@map("transactions")
+}
+
+enum BalanceType {
+  DEPOSIT
+  WINNING
 }

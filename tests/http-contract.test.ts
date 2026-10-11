@@ -353,3 +353,133 @@ describe.skipIf(!serverUp)("auth endpoints", () => {
     }
   });
 });
+
+/* ==========================================================================
+   ADMIN API (anonymous callers)
+   ========================================================================== */
+
+describe.skipIf(!serverUp)("admin API (anonymous)", () => {
+  it("GET /api/admin/me → 401 JSON, and the response is never cached", async () => {
+    const res = await raw("/api/admin/me");
+
+    expect(res.status).toBe(401);
+    expect(res.headers.get("cache-control")).toBe("no-store");
+    expect(await res.json()).toMatchObject({ ok: false, code: "UNAUTHENTICATED" });
+  });
+
+  it("POST /api/admin/login rejects unknown credentials and sets no cookie", async () => {
+    const res = await raw("/api/admin/login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        email: "nobody@example.test",
+        password: "not-a-real-password",
+      }),
+    });
+
+    expect(res.status).toBe(401);
+    expect(res.headers.get("set-cookie")).toBeNull();
+    expect(await res.json()).toEqual({
+      ok: false,
+      error: "Invalid email or password.",
+      code: "INVALID_CREDENTIALS",
+    });
+  });
+
+  it("POST /api/admin/logout succeeds without a session and clears the cookie", async () => {
+    const res = await raw("/api/admin/logout", { method: "POST" });
+
+    expect(res.status).toBe(200);
+    // __Host-cpc_admin_session in production builds, cpc_admin_session in development.
+    expect(res.headers.get("set-cookie") ?? "").toMatch(
+      /(__Host-)?cpc_admin_session=;.*Max-Age=0/,
+    );
+  });
+});
+
+/* ==========================================================================
+   WALLET API (anonymous callers)
+   ========================================================================== */
+
+describe.skipIf(!serverUp)("wallet API (anonymous)", () => {
+  it("GET /api/wallet → 401 JSON, and the response is never cached", async () => {
+    const res = await raw("/api/wallet");
+
+    expect(res.status).toBe(401);
+    expect(res.headers.get("cache-control")).toBe("no-store");
+    expect(await res.json()).toMatchObject({ ok: false, code: "UNAUTHORIZED" });
+  });
+
+  it("GET /api/wallet/transactions → 401 before the query is validated", async () => {
+    const res = await raw("/api/wallet/transactions?limit=abc");
+
+    expect(res.status).toBe(401);
+    expect(res.headers.get("cache-control")).toBe("no-store");
+    expect(await res.json()).toMatchObject({ ok: false, code: "UNAUTHORIZED" });
+  });
+
+  it("GET /api/admin/wallet/:userId → 401 and no member data", async () => {
+    const res = await raw("/api/admin/wallet/some-member-id");
+
+    expect(res.status).toBe(401);
+    expect(res.headers.get("cache-control")).toBe("no-store");
+    expect(await res.json()).toMatchObject({ ok: false, code: "UNAUTHENTICATED" });
+  });
+});
+
+/* ==========================================================================
+   PAYMENT API (anonymous callers)
+   ========================================================================== */
+
+describe.skipIf(!serverUp)("payment API (anonymous)", () => {
+  const json = (body: unknown): RequestInit => ({
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+
+  it("GET /api/payment/qr → 401, and the QR is never cached", async () => {
+    const res = await raw("/api/payment/qr");
+
+    expect(res.status).toBe(401);
+    expect(res.headers.get("cache-control")).toBe("no-store");
+    expect(await res.json()).toMatchObject({ ok: false, code: "UNAUTHORIZED" });
+  });
+
+  it("POST /api/payment/request → 401 before the claim is read or validated", async () => {
+    const res = await raw(
+      "/api/payment/request",
+      json({ amount: 500, utrNumber: "123456789012", screenshotUrl: "https://storage.example.test/a.png" }),
+    );
+
+    // Nobody anonymous can park rows in the review queue, so a well-formed body
+    // and a malformed one get the same answer.
+    expect(res.status).toBe(401);
+    expect(await res.json()).toMatchObject({ ok: false, code: "UNAUTHORIZED" });
+
+    const malformed = await raw("/api/payment/request", json("{"));
+    expect(malformed.status).toBe(401);
+  });
+
+  it("GET /api/admin/payments → 401 and no claim data", async () => {
+    const res = await raw("/api/admin/payments?status=PENDING&limit=abc");
+
+    expect(res.status).toBe(401);
+    expect(res.headers.get("cache-control")).toBe("no-store");
+    expect(await res.json()).toMatchObject({ ok: false, code: "UNAUTHENTICATED" });
+  });
+
+  it.each(["approve", "reject"])("POST /api/admin/payments/:id/%s → 401", async (action) => {
+    const res = await raw(`/api/admin/payments/some-claim-id/${action}`, json({}));
+
+    expect(res.status).toBe(401);
+    expect(await res.json()).toMatchObject({ ok: false, code: "UNAUTHENTICATED" });
+  });
+
+  it("does not let a GET reach a POST-only review action", async () => {
+    for (const action of ["approve", "reject"]) {
+      const res = await raw(`/api/admin/payments/some-claim-id/${action}`);
+      expect(res.status).toBe(405);
+    }
+  });
+});

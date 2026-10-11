@@ -55,7 +55,15 @@ export type ApiError = {
     | "NOT_FOUND"
     | "VALIDATION_ERROR"
     | "RATE_LIMITED"
-    | "INTERNAL_ERROR";
+    | "INTERNAL_ERROR"
+    /** Body was not `application/json`. Blocks forced form posts. */
+    | "UNSUPPORTED_MEDIA_TYPE"
+    /** Body was present but not parseable JSON. */
+    | "INVALID_JSON"
+    /** The endpoint exists, but `MONEY_MODE` keeps it closed. */
+    | "PAYMENTS_DISABLED"
+    /** No live or upcoming match has a payment QR configured. */
+    | "NO_ACTIVE_QR";
   details?: unknown;
 };
 

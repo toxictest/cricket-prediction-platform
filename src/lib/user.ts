@@ -70,7 +70,8 @@ function normalizeImage(image: string | null | undefined): string | null {
  *     member who first used developer access can later link real Google.
  *  2. Existing rows get their profile refreshed and `lastLoginAt` bumped.
  *  3. New rows are inserted with a crypto-random, collision-checked referral
- *     code and an optional referrer attribution.
+ *     code and an optional referrer attribution. The same write creates the
+ *     member's zero-balance wallet (see `src/lib/wallet.ts`).
  *
  * The whole operation is wrapped in a retry loop: `referralCode` and `googleId`
  * are `@unique`, so a concurrent sign-up can race us past the pre-check. Any
@@ -136,6 +137,9 @@ export async function provisionUser(
     const referralCode = await generateUniqueReferralCode();
 
     try {
+      // The wallet is a nested create, so Prisma writes it in the same
+      // database transaction as the user. If the wallet insert fails, the user
+      // row is rolled back too, and no member exists without a wallet.
       const user = await prisma.user.create({
         data: {
           googleId,
@@ -145,6 +149,7 @@ export async function provisionUser(
           referralCode,
           referredById: referrerId,
           lastLoginAt: new Date(),
+          wallet: { create: { depositBalance: 0, winningBalance: 0 } },
         },
       });
       return { user, created: true, referred: Boolean(referrerId) };

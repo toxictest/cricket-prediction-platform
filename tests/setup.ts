@@ -46,3 +46,19 @@ if (!process.env.NEXTAUTH_SECRET) {
 if (!process.env.NEXTAUTH_URL) {
   process.env.NEXTAUTH_URL = "http://localhost:3000";
 }
+
+// Admin sessions refuse to sign tokens without a real secret (see admin-session.ts),
+// and they reject the "replace-me..." placeholder that setup-dev-db.sh writes into a
+// fresh .env. Tests get an obviously fake value either way, so they never depend on
+// a developer's .env and never sign a token with a placeholder key.
+const placeholder = process.env.ADMIN_SESSION_SECRET ?? "";
+if (placeholder.length === 0 || placeholder.startsWith("replace-me")) {
+  process.env.ADMIN_SESSION_SECRET = "test-only-admin-session-secret-0123456789";
+}
+
+// Money endpoints are gated on MONEY_MODE and switch themselves off under
+// NODE_ENV=production. A test run always exercises the code, so the gate is
+// opened here; the flag's own behaviour is covered in tests/payment-http.test.ts.
+if (!process.env.MONEY_MODE) {
+  process.env.MONEY_MODE = "true";
+}
