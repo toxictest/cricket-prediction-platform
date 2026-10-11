@@ -334,6 +334,7 @@ describe("the code vocabulary is closed", () => {
     "BUILD_UNAVAILABLE",
     "PAYMENTS_DISABLED",
     "NO_ACTIVE_QR",
+    "AUTH_NOT_CONFIGURED",
     // staff-side codes, all declared on AdminApiError
     "UNAUTHENTICATED",
     "INVALID_CREDENTIALS",
@@ -344,7 +345,9 @@ describe("the code vocabulary is closed", () => {
     const offenders: string[] = [];
     for (const route of ROUTES) {
       const source = readFileSync(join(API_ROOT, route), "utf8");
-      for (const match of source.matchAll(/code:\s*"([A-Z_]+)"/g)) {
+      // Both spellings count: a hand-built `code: "X"` and a helper call that
+      // invents a code, because the second is just as much a new contract.
+      for (const match of source.matchAll(/(?:code:\s*|errorResponse\(\s*)"([A-Z_]+)"/g)) {
         if (!ROUTE_CODES.has(match[1] as string)) offenders.push(`${route}: ${match[1]}`);
       }
     }
@@ -368,6 +371,7 @@ describe("the code vocabulary is closed", () => {
       "PAYMENTS_DISABLED",
       "NO_ACTIVE_QR",
       "BUILD_UNAVAILABLE",
+      "AUTH_NOT_CONFIGURED",
     ]) {
       expect(declared.has(code), code).toBe(true);
     }

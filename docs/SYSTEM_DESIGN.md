@@ -754,3 +754,86 @@ The fields were kept exactly as specified. The gaps below should be closed befor
 **Not verified in this sandbox:** the checklist's manual sections (C, D, E, F panels, G) were authored, not walked by a second person in a browser; nobody clicked through `F1–F8` on a phone-width viewport in this pass, and `G7`'s claim that no upload surface exists is a read of the route tree plus the missing route, not a fuzz.
 
 **Left open on purpose:** `redactSecrets` is a pattern list, so a secret that arrives in a shape it does not know still reaches the log — the durable fix is not logging error objects at all, which the four mappers now do but third-party libraries do inside their own `console.error` calls (Prisma's `prisma:error` lines are its own, and were checked for leakage rather than changed).
+
+## Appendix J: The member app (Expo) and the bearer path it needed
+
+The React Native app lives in this repository at **`mobile/`**, as its own npm project: its own
+`package.json`, lockfile, `README.md` (setup, login, APK build, troubleshooting) and `tsc` gate, with
+nothing installed across the boundary. Keeping one tree means the API contract and the client that
+codes against it move in one commit, which is worth more than the tidiness of two repositories —
+but only while the backend's gate stays blind to it. So the root `tsconfig.json` excludes `mobile`
+(its `include` is every TypeScript file in the repo, which would otherwise typecheck React Native
+under Next's config) and `.eslintrc.json` ignores `mobile/` (Next's rules would judge a phone app by
+web idioms, and someone would oblige them). `tests/mobile-boundary.test.ts` pins both exclusions,
+that no backend file imports into `mobile/`, that the app imports no `@/` or `next/` module, and —
+the one that would matter most if it ever lapsed — that no URL in the app's service layer contains
+`admin`, because this client is a member's and an admin path in it would mean a staff surface being
+reached with a member's token.
+
+Two details found by building rather than reading: `expo prebuild` aborted on this project until
+`app.config.ts` stopped pointing `adaptiveIcon` at an `adaptive-icon.png` the SDK 57 template does
+not ship (it ships three layers now), and the app's own `tsconfig` had a `@/* → ./src/*` alias that
+nothing used — removed, because inside `mobile/` that alias resolves to the app while the same
+specifier in a backend file resolves to `src/`, which is a bug that compiles.
+
+What the app required from the backend is one thing: a way to authenticate without a cookie. It did
+not need a new money surface, a new id, or a new permission.
+
+| Check | Method | Result |
+|---|---|---|
+| A second credential, without weakening the first | read of `src/lib/member-auth.ts` | `requireMember()` tries `Authorization: Bearer …` (case-insensitive, `readBearer` rejects anything that is not a bearer attempt) **before** the NextAuth cookie, and a bearer attempt is answered on its own terms: a bad token is a 401/503, never a fall-through to the cookie. The comment in the file states why — a client holding both credentials would otherwise act as whichever identity was cached, and that is a bug nobody sees until a wallet is credited to the wrong person. `headers()` is wrapped in a `try` because the module is also imported by scripts, where there is no request store. |
+| Token shape, and what is *not* trusted | read of `src/lib/member-token.ts` | HS256, issuer **and** audience `cpc-member`, `typ: "member-access"`, `uid`, `exp` at 30 days (`MEMBER_TOKEN_TTL_SECONDS`), `clockTolerance: 5`. Signature plus issuer/audience are not enough: `verifyMemberToken` rejects any payload whose `typ` this function did not mint, so a validly signed token from another purpose is not a session. Only `uid` is returned to callers; the `email` claim is a label. Secret is `MEMBER_TOKEN_SECRET` else `NEXTAUTH_SECRET`, and `getMemberTokenSecret()` refuses anything shorter than 32 characters instead of deriving a key from a README value. |
+| Admin routes unreachable with a member token | grep for `authorization` in `src/lib/admin-guard.ts` and `src/lib/admin-session.ts` | **No matches**: the admin guard reads only its own httpOnly cookie. The mint function takes a member id and never consults `AdminUser`. The split is therefore structural rather than a permission check that could be forgotten. |
+| Revocation, honestly | read of `requireMember()` | There is none, and it is documented as such: no `tokensRevokedAt`, no per-request row read. A leaked token is valid until it expires; a deleted member row yields empty results, not somebody else's wallet. Early revocation means rotating the secret, which signs out every member — recorded in `DEVELOPMENT.md` §3 rather than hidden, because "the app stores a 30-day token" invites the question. |
+| Sign-in endpoint | read of `src/app/api/auth/mobile/route.ts` | Body is `.strict()` with exactly one of `idToken` / `accessToken` / `code`+`verifier`, plus optional `referralCode` (4–24). `createRateLimiter({limit: 8, windowMs: 15 * 60 * 1000})` keyed on client IP → `429` with `Retry-After`. `memberAuthConfigured()` gates the whole route on the **signing secret** (it calls `getMemberTokenSecret()` and nothing else) → `503 AUTH_NOT_CONFIGURED`; the Google paths separately require a non-placeholder client id via `allowedGoogleAudiences()`. Exported as `guardRoute("api/auth/mobile", handlePOST)` like every other route, so it is inside the envelope assertion. |
+| Browser handoff, no native OAuth client | read of `src/lib/mobile-handoff.ts` + `src/app/mobile/start/route.ts` | App-side: 43–128 char verifier, S256 challenge. Server-side: `?challenge=` length-checked (43–128) and a bad one is a **plain-text 400**, not an HTML redirect; an unauthenticated browser is 302'd to `/login?next=/mobile/start?challenge=…` so the handoff resumes after sign-in; the code is HS256 with audience `cpc-mobile-handoff`, `HANDOFF_TTL_SECONDS = 120`, and 302s to `cricketmobile://auth?code=…` (`MOBILE_REDIRECT_SCHEME`). Single-use is an in-process `jti` map with a 150-second retention — the file states plainly that multi-instance deployment means a table, and the swap is described as mechanical. `?redirect=none` prints the code for Expo Go, where no custom scheme is registered. |
+| Dev mint cannot become a live hole | read of `scripts/issue-member-token.ts` | Exits non-zero when `NODE_ENV=production`; mints only for an email that already exists as a member (it cannot create an account) and prints the `curl` form so the token is testable from a shell. `npm run mobile:token -- <email>`; the `MEMBER_TOKEN_SECRET`/`GOOGLE_*` wording in `.env.example` §3b was rewritten this pass because it attributed the `503` to the Google variables, which `memberAuthConfigured()` does not read. |
+| The app codes against real payloads, not invented ones | grep of each route's `apiSuccess(...)` before writing each service | Five guesses were caught and corrected: the wallet is `{depositBalance, winningBalance, total, withdrawableBalance}`; the score endpoint returns `{match, score}`, not a bare score; `/api/matches` takes `status&from&to&order&limit&cursor`; `WithdrawalReceipt` carries `wallet` + `transaction`, and the member list rows carry `reviewNote`/`adminUtr`; **`GET /api/wallet/transactions` parses only `limit` and `cursor`**, so the `type`/`balanceType` filters that had been drafted into `src/services/wallet.ts` were deleted rather than left as controls that silently do nothing. |
+| `GET /api/referral` is a validator, not a summary | read of the route | `?code=` (4–24) → `{code, referrerFirstName}`, `400`/`404`. `docs/TESTING_CHECKLIST.md` C4 had claimed it returned `link`/`referralCode`/`referralCount`/`totalEarned`/`tier` and validated `?limit=` — both invented. C4 was rewritten to describe the validator, and the app's `ReferralSummary` type was replaced with `ReferralCheck`. The profile screen therefore builds its own invite link from `EXPO_PUBLIC_API_URL` + the member's own code, which is the only honest source for it. |
+| App typechecks | `npx tsc --noEmit` over `app/` + `src/` (40 files; the config plugin is plain JS and outside the gate) | Exit 0. Twelve errors were cleared to get there, and the three that say something about the platform: `headerBackTitleVisible` and `StyleSheet.absoluteFillObject` are not in this React Native's types, `react-native-paper` exports `MD3Theme` and no `Theme`, and **`@react-navigation/bottom-tabs` is not importable at all** — SDK 57 vendors it under `expo-router/build/react-navigation/`, so the custom tab bar declares the slice of `BottomTabBarProps` it reads structurally and the mismatch at the call site (`tabBarLabel` may be a render function upstream) is what forced the coercion. A dependency you cannot name is a dependency you cannot type, and that was found by the compiler, not on a phone. |
+| App bundles | `npx expo export --platform android` | Exit 0, `Android Bundled … (1429 modules)`, assets collected. This is the strongest end-to-end check available without an emulator: Metro resolved every import, Expo Router compiled the route tree, and the config was accepted. |
+| App config sanity | `npx expo-doctor` | `21/21 checks passed. No issues detected!` Run after `expo-splash-screen` was dropped (the loading gate lives in the `(protected)` layout, so the native hold was redundant) and after `android.edgeToEdgeEnabled`, `android.usesCleartextTraffic` and the top-level `splash` key were removed as keys this SDK's `ExpoConfig` type rejects — cleartext is Expo's debug/release split to make, not ours to widen. |
+| First real Android artifact | `npx expo prebuild --platform android` then `./gradlew assembleRelease`, on a 2 GB / 2-core box with 5 GB of swap | Both exit 0. `app-release.apk`, 38,459,023 bytes, arm64-v8a, minSdk 24 / targetSdk 36, `assets/index.android.bundle` (2.6 MB, Hermes) inside it, so it needs no dev server. Inspected rather than trusted: `aapt2 dump badging` for the package/version/permissions, `apksigner verify --print-certs` for the signer, and the compiled `EXPO_PUBLIC_API_URL` grepped out of the bundle. |
+
+**Two bugs the build found that reading could not.** `app.config.ts` pointed `adaptiveIcon` at
+`./assets/adaptive-icon.png`, which the SDK 57 template does not ship — `expo prebuild` aborted on
+it, and any `eas build` would have too, so the config was wrong in a way no typecheck can see (the
+template now uses the three layers it actually has). And the app's own `tsconfig.json` carried a
+`@/* → ./src/*` alias that nothing used; inside `mobile/` it resolves to the app while the same
+specifier in a backend file resolves to `src/`, so a future import could compile against the wrong
+tree. Removed, and asserted against by `tests/mobile-boundary.test.ts`.
+
+**Not verified in this sandbox:** the app was never run on a device or emulator — no emulator here —
+so every screen is proven to *bundle*, *typecheck* and *package into an installable APK*, not to lay
+out on a phone or survive a real tap sequence. Google sign-in was never exercised end to end: no
+real client id exists in this environment, so the exchange path is verified by reading the guard
+clauses, not by trading a token. The APK is signed with the template's debug key (what the bare
+`release` config uses), so it is sideload-test material only. `eas build` was never invoked, so the
+cloud path in `mobile/README.md` is assembled from `eas.json` and the CLI's own profile names, not
+executed. And the `npm install --legacy-peer-deps` workaround is documented because a bare install
+fails here on `react-dom@19.3.0` versus `react@19.2.3` — a peer-range disagreement inside the Expo
+template, reproduced once, not root-caused upstream.
+
+**Left open on purpose:** the low-RAM build flags (`-g0` for the native objects, one ABI, no daemon,
+`android.r8.maxWorkers=1`) live in a local `android/` that is generated and git-ignored rather than
+in the committed config, because they are this machine's constraint and not the app's; they are
+written out in `mobile/README.md` §6 instead. The permission-trimming config plugin *is* committed,
+since the manifest it produces is what ships.
+
+**Also left open:** the APK is not referenced by the web app's Download Center, and
+`public/downloads/` does not exist in this repository — the site's download button still points at
+whatever `APK_DIRECT_URL` says. Publishing this artifact there is a copy and an env var, not code.
+
+The app has no prediction-bet UI. Everything in the phase list the member
+asked for is present — auth, matches, live score, wallet, deposit claim, payout, ledger, profile —
+and placing a bet is deliberately not, because the stake rules, the settlement copy and the odds
+display are the parts of this product a lawyer will read first; shipping them in a second client
+before the first is reviewed would double the surface without new information. Payment screenshots
+stay on-device (`EXPO_PUBLIC_UPLOAD_URL` optional) because the backend has no upload endpoint and
+`assertScreenshotUrl` trusts only https hosts on its own allow-list — inventing a URL field the
+server would reject is worse than a claim filed with a note saying so. There is no clipboard
+permission for the referral code: `expo-clipboard` failed to install in this environment and the
+`Share` sheet is the better answer anyway, so the dependency was removed rather than worked around.
+And the money endpoints remain gated by `MONEY_MODE`, which the app renders as its own 503 message:
+honoured by configuration, not by absence, so the day counsel answers the question in §2 nothing has
+to be rebuilt.

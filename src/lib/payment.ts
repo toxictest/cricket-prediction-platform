@@ -732,3 +732,106 @@ function isUtrConflict(error: unknown): boolean {
 export { DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE };
 /** Re-exported for the same reason: one set of note bounds across both queues. */
 export { MIN_REVIEW_NOTE_LENGTH, MAX_REVIEW_NOTE_LENGTH };
+
+/* ==========================================================================
+   MEMBER: READ MY OWN CLAIMS
+   ========================================================================== */
+
+/**
+ * What a member is shown about their own claim.
+ *
+ * Deliberately not the queue item: `user` and `reviewedBy` are the admin's
+ * context, not the member's, and a member already knows their own name. The
+ * reviewer's *note* is kept, because on a rejection it is the only explanation
+ * the member gets.
+ */
+const MY_SELECT = {
+  id: true,
+  amount: true,
+  tokensToCredit: true,
+  utrNumber: true,
+  screenshotUrl: true,
+  status: true,
+  reviewNote: true,
+  createdAt: true,
+  updatedAt: true,
+} as const satisfies Prisma.PaymentRequestSelect;
+
+export type MyPaymentRequest = {
+  id: string;
+  amount: number;
+  tokensToCredit: number;
+  utrNumber: string;
+  screenshotUrl: string;
+  status: PaymentStatus;
+  reviewNote: string | null;
+  createdAt: Date;
+  updatedAt: Date;
+};
+
+export type MyPaymentPage = {
+  items: MyPaymentRequest[];
+  nextCursor: string | null;
+  /** Per-status counts over the member's whole history, so the app can badge "2 pending". */
+  counts: { PENDING: number; APPROVED: number; REJECTED: number };
+};
+
+/**
+ * The member's own claims, newest first, keyed on the same cursor format as the
+ * admin queue and the wallet ledger.
+ *
+ * No `requireMoneyMode()` here: with the flag off a member can still file
+ * nothing, but they must still be able to read what already happened. Hiding
+ * history behind a deployment switch is how a support conversation starts at
+ * zero.
+ */
+export async function listMyPaymentRequests(
+  userId: string,
+  filters: { status?: PaymentStatus; limit?: number; cursor?: string | null } = {},
+): Promise<MyPaymentPage> {
+  const limit = resolveLimit(filters.limit);
+  if (limit === null) {
+    throw new PaymentError(
+      "VALIDATION_ERROR",
+      `limit must be a whole number from 1 to ${MAX_PAGE_SIZE}`,
+    );
+  }
+
+  const after = filters.cursor ? parseCursorOrThrow(filters.cursor) : null;
+  const where: Prisma.PaymentRequestWhereInput = {
+    userId,
+    ...(filters.status ? { status: filters.status } : {}),
+    ...(after
+      ? {
+          OR: [
+            { createdAt: { lt: after.createdAt } },
+            { createdAt: after.createdAt, id: { lt: after.id } },
+          ],
+        }
+      : {}),
+  };
+
+  const [rows, counts] = await Promise.all([
+    prisma.paymentRequest.findMany({
+      where,
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      take: limit + 1,
+      select: MY_SELECT,
+    }),
+    prisma.paymentRequest.groupBy({
+      by: ["status"],
+      where: { userId },
+      _count: { _all: true },
+    }),
+  ]);
+
+  const hasMore = rows.length > limit;
+  const items = hasMore ? rows.slice(0, limit) : rows;
+  const last = items[items.length - 1];
+
+  return {
+    items,
+    nextCursor: hasMore && last ? encodeCursor(last.createdAt, last.id) : null,
+    counts: toCounts(counts),
+  };
+}

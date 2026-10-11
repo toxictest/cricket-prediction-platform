@@ -85,7 +85,9 @@ export type ApiError = {
     /** The endpoint exists, but `MONEY_MODE` keeps it closed. */
     | "PAYMENTS_DISABLED"
     /** No live or upcoming match has a payment QR configured. */
-    | "NO_ACTIVE_QR";
+    | "NO_ACTIVE_QR"
+    /** `MEMBER_TOKEN_SECRET`/`NEXTAUTH_SECRET` or the Google client ids are unset, so no token can be minted. */
+    | "AUTH_NOT_CONFIGURED";
   /** Field details for a form (Zod's `flatten()` shape), or a small machine hint. */
   details?: unknown;
 };

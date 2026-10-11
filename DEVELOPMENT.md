@@ -87,6 +87,86 @@ than signing sessions with a value copied out of a repository.
 Both queues exist so a human, not code, decides whether money moved. Nothing in the system talks
 to a payment gateway.
 
+### Getting a member token first
+
+Every curl below authenticates with `Authorization: Bearer <member token>`. `requireMember()`
+(`src/lib/member-auth.ts`) tries that header before the session cookie and **fails closed**: a
+malformed bearer is a 401, never a silent fallback to whatever cookie the browser happens to
+hold. Only members can hold one — minting it never consults the `AdminUser` table, and the token
+is minted with a scope that no admin route accepts.
+
+A token is an HS256 JWT (`src/lib/member-token.ts`) with issuer *and* audience `cpc-member`, a
+30-day lifetime, and a payload of `typ: "member-access"`, `uid`, and the email as a label. Only
+`uid` is trusted: `requireMember()` returns that id and drops the email, and every route keys its
+queries on the id, so the claim nobody verifies is also the claim nobody acts on. `verifyMemberToken`
+checks signature, issuer, audience and a 5-second clock skew, then rejects any token whose `typ`
+this function did not mint — a validly signed token from another purpose is not a member session.
+It is signed with `MEMBER_TOKEN_SECRET`, falling back to `NEXTAUTH_SECRET`, and refuses to sign with
+anything shorter than 32 characters.
+
+Admin routes are unreachable with it: `requireAdmin()` reads only its own httpOnly cookie and never
+looks at an `authorization` header, and the minting function takes a member id — it does not consult
+the `AdminUser` table, so there is nothing to accidentally trade.
+
+One caveat worth knowing before you ship: there is no revocation list and no per-request database
+check. A leaked bearer token stays valid for its remaining lifetime, and deleting a member row does
+not invalidate the tokens already issued to it (the queries then find nothing, so the member sees an
+empty wallet rather than somebody else's). Early revocation means rotating `MEMBER_TOKEN_SECRET`,
+which signs out every member at once — deliberate, since a half-measure like a `tokensRevokedAt`
+column would need a read on every request to be worth having.
+
+Three proofs are accepted by `POST /api/auth/mobile`, and the body is `.strict()`, so a stray
+`userId` is a 400 rather than a surprise:
+
+| Body | Used by |
+| --- | --- |
+| `{ idToken }` | a native Google SDK, if one is ever added — verified against Google's JWKS |
+| `{ accessToken }` | the same, for apps that only have an access token |
+| `{ code, verifier }` | the browser handoff below — what the Expo app actually does |
+| `referralCode` (4–24, optional, on any of the three) | applies a referral at sign-up |
+
+8 exchanges per IP per 15 minutes; past that, `429`. Two configuration gates answer
+`503 AUTH_NOT_CONFIGURED` rather than throwing, and they fail for different reasons: the route
+refuses everything when there is no usable signing secret (`memberAuthConfigured()` checks that and
+nothing else), and the `idToken`/`accessToken` paths additionally refuse when
+`GOOGLE_MOBILE_CLIENT_ID`/`GOOGLE_CLIENT_ID` are unset or still placeholders
+(`allowedGoogleAudiences()` filters those out rather than trusting them). The `{ code, verifier }`
+handoff needs neither client id *at this endpoint* — the browser session already proved the
+identity, and it is the web Google provider that needs `GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET`.
+An app can therefore show "sign-in is disabled on this build" instead of retrying forever.
+
+For local work, skip Google entirely:
+
+```bash
+npm run mobile:token -- member@example.com   # prints a bearer token for an existing member
+```
+
+That is `scripts/issue-member-token.ts`. It refuses to run when `NODE_ENV=production`, and it
+mints for an email that already exists as a member — it cannot create an account.
+
+**The handoff**, because a React Native app should not own an OAuth client secret: the app makes
+a PKCE verifier, hashes it (S256) and opens `GET /mobile/start?challenge=<hash>` in the system
+browser. An unsigned browser is 302'd to `/login` with the challenge intact in `next`, so the
+handoff resumes after sign-in. A signed-in browser gets a one-shot code — HS256, audience
+`cpc-mobile-handoff`, 120 seconds, bound to that challenge — and is redirected to
+`cricketmobile://auth?code=…`. The app POSTs `{ code, verifier }` and receives the bearer token;
+the code is exchanged once and can be replayed by nobody else without the verifier. Single-use is
+a per-instance `jti` map (`src/lib/mobile-handoff.ts`), which is enough for one process and is
+noted as needing a table if this ever runs on several. A missing or oversized `challenge` is a
+400 in plain text, not an HTML redirect — the window that lands there was opened by an app that
+does not know how to start the flow. `?redirect=none` stops at a page that prints the code instead
+of redirecting, for running the app inside Expo Go where the custom scheme is not registered; it
+reveals nothing the device did not just ask for.
+
+Two consequences the mobile app respects: `GET /api/session` is cookie-only, so a cold start
+probes `GET /api/me` with the stored bearer instead; and there is no upload endpoint for payment
+screenshots — `screenshotUrl` must already be an https URL on `DOWNLOAD_ALLOW_HOSTS`, so the app
+only accepts one it can trust and files the claim without proof otherwise. The Expo app lives in
+this repository at `mobile/`, and the root `tsconfig.json` and `.eslintrc.json` exclude that
+directory — without the exclusion, `npm run verify` would typecheck and lint React Native code
+under Next's rules. `tests/mobile-boundary.test.ts` pins both the exclusion and the fact that
+neither side imports the other.
+
 ### Deposit: member claims, admin credits
 
 ```bash

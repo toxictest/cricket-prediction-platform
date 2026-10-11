@@ -443,6 +443,14 @@ cricket-prediction-platform/
 │
 ├── docs/screenshots/                   # captured from the running app
 │
+├── mobile/                             # Expo member app — its own package.json and tsconfig
+│   ├── app/                            #   Expo Router screens
+│   ├── src/                            #   services, state, components, theme
+│   └── README.md                       #   setup, login flow, APK build
+│                                       #   (excluded from the root tsconfig + ESLint so the
+│                                       #    backend gate never touches React Native; pinned by
+│                                       #    tests/mobile-boundary.test.ts)
+│
 ├── src/
 │   ├── middleware.ts                   # edge gate + referral capture
 │   │
@@ -889,6 +897,7 @@ CMD ["npm", "start"]
 | `npm test` | `vitest` | Watch mode |
 | `npm run test:run` | `vitest run` | One pass, then exit |
 | `npm run verify` | — | `typecheck` → `lint` → `test:run` → `build`; what CI should run |
+| `npm run mobile:token -- <email>` | `tsx scripts/issue-member-token.ts` | Print a 30-day member bearer token for the `mobile/` app; refuses `NODE_ENV=production` and cannot create an account |
 
 `db:reset` re-seeds because `prisma.seed` is wired to `db:seed`, and the seed is written to be
 harmless: with no `ADMIN_EMAIL`/`ADMIN_PASSWORD` it prints a warning and exits 0, and it never

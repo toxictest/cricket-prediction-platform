@@ -58,7 +58,7 @@ TEST_BASE_URL=http://127.0.0.1:3000 npx vitest run tests/http-contract.test.ts
 | C1 | Google sign-in creates the member | `/dashboard` → sign in → `GET /api/session` shows `isRegistered: true`, `token`, `user.referralCode` shaped `CRC-XXXXXX` |
 | C2 | Wallet exists without asking | `GET /api/wallet` → `{"ok":true,"data":{"depositBalance":0,"winningBalance":0,"totalBalance":0,"withdrawableBalance":0,…}}` — never `WALLET_NOT_FOUND` for a freshly provisioned member |
 | C3 | Second sign-in does not duplicate | sign out, sign in again → still exactly one `Wallet` row and one `User` row (the `getServerSession` bug that created shadow users is the regression to watch) |
-| C4 | Referral link | `GET /api/referral` → `link`, `referralCode`, `referralCount`, `totalEarned`, `tier`; `GET /api/referral?limit=1` → 200; `?limit=999` → 400 `VALIDATION_ERROR` |
+| C4 | Referral code check | `GET /api/referral?code=<a member's CRC>` → 200 `{code, referrerFirstName}` (first name only — it is a validator, not a profile lookup); no `code` param → 400 `VALIDATION_ERROR`; a well-formed code nobody holds → 404 with `details.reason`; a 15-minute-cached answer would let a proxy leak codes, so `cache-control` must be `no-store` |
 | C5 | Referral claims are not client-writable | no route accepts a referrer; `POST /api/qr/capture` is a no-op by design (returns 200 + explanation) |
 | C6 | Guest isolation | with no cookie: `/dashboard`, `/me`, `/predict/[matchId]` render the login screen; `GET /api/me` → 401 `UNAUTHORIZED` |
 | C7 | A dead session degrades cleanly | with an expired or tampered `cricket_session` cookie, `GET /api/me` → 401 JSON and `/dashboard` renders the login state — never a 500 page and never a half-rendered dashboard |

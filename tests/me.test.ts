@@ -57,6 +57,11 @@ describe("the member-facing API surface", () => {
    */
   const PUBLIC_ROUTES = [
     "auth/[...nextauth]",
+    // The mint route for the native app. Open by definition — a signed-in member has nothing to
+    // exchange — and it is the one route that *creates* a session, so the checks that keep it safe
+    // are its own: a proof from Google or a PKCE-bound one-shot code, a `.strict()` body, and a
+    // per-IP throttle. Asserted below rather than assumed here.
+    "auth/mobile",
     "health",
     "referral",
     "referral/capture",
@@ -112,6 +117,33 @@ describe("the member-facing API surface", () => {
     // public: it must not be.
     const me = routes.find((entry) => entry.key === "me");
     expect(me!.source).toContain("requireMember(");
+  });
+
+  /**
+   * `PUBLIC_ROUTES` is a list someone can add to, and "the auth route obviously
+   * needs to be public" is exactly how a route ends up trusting a body field for
+   * identity. So the one route that *issues* a member session is checked on its own
+   * terms: what it may be handed, and the three things that make being public safe.
+   */
+  it("keeps the route that mints a member session unable to be told who to mint for", () => {
+    const mint = routes.find((entry) => entry.key === "auth/mobile");
+    expect(mint, "auth/mobile should exist").toBeDefined();
+    const source = mint!.source;
+
+    // No identity and no money in the accepted body — not as a style rule but because
+    // `.strict()` turns an unexpected key into a 400 only if it is not declared.
+    expect(source).toMatch(/\.strict\(\)/);
+    expect(source).not.toMatch(/(userId|memberId|email|tokensToCredit|amount)\s*:\s*z\./);
+    // It must not read the browser's session either, or a stolen cookie becomes a
+    // token the app can keep for 30 days.
+    expect(source).not.toContain("getServerSession(");
+    // Public is only survivable with a throttle, and it has to be per IP: a member
+    // under attack has no session to key a limiter on yet.
+    expect(source).toContain("createRateLimiter(");
+    expect(source).toContain("getClientIp(");
+    // And it must refuse outright rather than throw when there is no key to sign with.
+    expect(source).toContain("memberAuthConfigured()");
+    expect(source).toContain("AUTH_NOT_CONFIGURED");
   });
 });
 
