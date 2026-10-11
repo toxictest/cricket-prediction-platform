@@ -1,4 +1,4 @@
-import React, { useCallback, useState } from "react";
+import React, { useCallback, useMemo, useState } from "react";
 import { Image, Linking, Pressable, StyleSheet, Text, View } from "react-native";
 import * as ImagePicker from "expo-image-picker";
 import { Button, ActivityIndicator } from "react-native-paper";
@@ -18,6 +18,11 @@ import { useWallet } from "../../../src/state/wallet";
 import { colors, spacing } from "../../../src/theme/theme";
 import { formatDateTime, formatIndian, formatRupees, timeAgo } from "../../../src/utils/format";
 import { PAYMENT_STATUS_LABELS } from "../../../src/utils/labels";
+import {
+  validateDepositAmount,
+  validateReference,
+  validateScreenshotUrl,
+} from "../../../src/utils/validation";
 import type { MyPaymentRequest, PaymentReceipt } from "../../../src/types/api";
 
 /*
@@ -31,7 +36,6 @@ import type { MyPaymentRequest, PaymentReceipt } from "../../../src/types/api";
  * form moved money is a member who calls support at 11pm.
  */
 
-const MAX_UTR = PAYMENT_LIMITS.maxUtrLength;
 
 export default function AddMoneyScreen() {
   const qr = usePoll(useCallback(() => getPaymentQr(), []));
@@ -52,29 +56,27 @@ export default function AddMoneyScreen() {
   // would be lost on the next refresh — so the tail and its cursor live here.
   const [tail, setTail] = useState<string | null>(null);
 
-  const amountNumber = Number(amount);
-  const errors = {
-    amount:
-      amount.trim() === ""
-        ? "Enter the amount you paid."
-        : !Number.isFinite(amountNumber) || !Number.isInteger(amountNumber)
-          ? "Amounts are whole rupees, no decimals."
-          : amountNumber < PAYMENT_LIMITS.minAmount || amountNumber > PAYMENT_LIMITS.maxAmount
-            ? `Between ${formatRupees(PAYMENT_LIMITS.minAmount)} and ${formatRupees(PAYMENT_LIMITS.maxAmount)}.`
-            : null,
-    utr:
-      utr.trim().length === 0
-        ? "The UTR is how an admin finds your payment in the bank statement."
-        : utr.trim().length < PAYMENT_LIMITS.minUtrLength || utr.trim().length > MAX_UTR
-          ? `A UTR is ${PAYMENT_LIMITS.minUtrLength} to ${MAX_UTR} characters.`
-          : null,
-    url:
-      url.trim().length === 0
-        ? "Paste the link to your payment screenshot."
-        : !/^https:\/\//i.test(url.trim())
-          ? "The link has to start with https://"
-          : null,
-  };
+  /*
+   * Three fields, three rules that exist on the server too. `PAYMENT_LIMITS` is a view
+   * of `MONEY_RULES`, which traces each number to the backend file that owns it, so the
+   * copy below cannot quietly disagree about a UTR length again.
+   */
+  const deposit = useMemo(() => validateDepositAmount(amount, formatRupees), [amount]);
+  const reference = useMemo(
+    () =>
+      validateReference(
+        utr,
+        "UTR",
+        "The UTR is how an admin finds your payment in the bank statement.",
+      ),
+    [utr],
+  );
+  const urlError = useMemo(
+    () => validateScreenshotUrl(url, "Paste the link to your payment screenshot."),
+    [url],
+  );
+
+  const errors = { amount: deposit.error, utr: reference.error, url: urlError };
   const valid = !errors.amount && !errors.utr && !errors.url;
 
   const pick = useCallback(async () => {
@@ -116,8 +118,10 @@ export default function AddMoneyScreen() {
     setFormError(null);
     try {
       const created = await createPaymentRequest({
-        amount: amountNumber,
-        utrNumber: utr.trim().toUpperCase(),
+        amount: deposit.value as number,
+        // Canonicalised exactly as the server does it — trimmed, upper-cased, inner
+        // spaces removed — so the string the member sees checked is the one stored.
+        utrNumber: reference.value,
         screenshotUrl: url.trim(),
       });
       setReceipt(created);
@@ -136,7 +140,7 @@ export default function AddMoneyScreen() {
     } finally {
       setSubmitting(false);
     }
-  }, [amountNumber, valid, utr, url, refresh, history]);
+  }, [deposit, reference, url, valid, refresh, history]);
 
   const items = [...(history.data?.items ?? []), ...older];
   const pageCursor = history.data?.nextCursor ?? tail;

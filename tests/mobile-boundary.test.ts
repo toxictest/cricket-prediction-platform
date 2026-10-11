@@ -42,8 +42,16 @@ describe("mobile/ stays a separate project inside one repository", () => {
     expect(existsSync(join(MOBILE, "package.json"))).toBe(true);
     expect(existsSync(join(MOBILE, "app.config.ts"))).toBe(true);
     expect(existsSync(join(MOBILE, "tsconfig.json"))).toBe(true);
-    const pkg = JSON.parse(readFileSync(join(MOBILE, "package.json"), "utf8")) as { main?: string };
+    const pkg = JSON.parse(readFileSync(join(MOBILE, "package.json"), "utf8")) as {
+      main?: string;
+      scripts?: Record<string, string>;
+    };
     expect(pkg.main).toBe("expo-router/entry");
+    // The app's logic tests run in the app, not here — the root vitest config includes only
+    // `tests/**`, so if this ever regressed the suite would silently stop being run at all.
+    expect(pkg.scripts?.test).toBe("vitest run");
+    expect(existsSync(join(MOBILE, "vitest.config.ts"))).toBe(true);
+    expect(existsSync(join(MOBILE, "src/utils/validation.test.ts"))).toBe(true);
     // The check is only meaningful if there is something in it to exclude.
     expect(appFiles.length).toBeGreaterThan(20);
   });

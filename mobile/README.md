@@ -50,6 +50,7 @@ Rules that survive the whole tree:
 
 ```bash
 npm install --legacy-peer-deps     # bare `npm install` fails: react-dom 19.3 vs react 19.2
+npm test                           # vitest, node only — the mirrored money rules (24 tests)
 cp .env.example .env               # then set EXPO_PUBLIC_API_URL
 npx expo start                     # press a / i, or scan the QR with Expo Go
 npm run typecheck                  # tsc --noEmit — the gate used in this repo
@@ -231,6 +232,7 @@ keystore, keep it, and use `eas build -p android --profile production`.
 | Money actions answered with 503 | `MONEY_MODE=off`. The endpoints are wired and documented; they are gated on counsel's approval. |
 | Login returns `AUTH_NOT_CONFIGURED` | No `GOOGLE_CLIENT_ID`/`SECRET` on the backend. Use the dev-token field to get in. |
 | `Cannot find module 'expo-router/entry'` | `package.json` → `"main"` must stay `"expo-router/entry"`. |
+| `expo-doctor`: "duplicate dependencies … react@19.3.0 (at: ../node_modules/react)" | Expected in this layout, and only advisory. The app lives in `mobile/` inside a Node project, so the checker walks up and finds the web app's React. The bundler does not: Metro resolves from `mobile/node_modules` (verified — `react@19.2.3`, `react-native@0.86.3`, `axios` all come from there, and `expo export` succeeds from this directory). What it does warn about is real in principle: never add a dependency to the repository root expecting the app to see it. |
 | `Gradle build daemon disappeared unexpectedly` during packaging | Not a code error: the kernel OOM-killed the JVM. See §6 for the flags that fit a 2 GB machine. |
 | `expo prebuild` aborts on a missing `adaptive-icon.png` | SDK 57's template ships three adaptive-icon layers; pointing `adaptiveIcon` at a file that is not there fails the icon pass. See `app.config.ts`. |
 
@@ -241,5 +243,12 @@ keystore, keep it, and use `eas build -p android --profile production`.
   A screen never builds a URL.
 - Money is an integer token count end to end; `formatIndian` only adds the separators.
 - No clipboard permission: the referral link is shared through the OS share sheet.
-- `npm run typecheck` is the only gate in this repo; the backend's http-contract tests are what
-  prove the shapes this app codes against.
+- Two gates here, both fast: `npm run typecheck` and `npm test` (Vitest, node environment, pure
+  logic only — no React Native runtime, no mocking of screens). The suite that matters is
+  `src/utils/validation.test.ts`, which pins every rule this app mirrors to the number written in
+  the backend file, by reading that file. It is a witness, so it is written to fail loudly when it
+  cannot see anything: the cross-check asserts that each backend source was reachable and parsed.
+- `src/utils/validation.ts` is the only place a mirrored number is written down. The screens call
+  the validators; the services derive their limit objects from the same constants. A rule restated
+  in a screen is a rule that will drift — one already had (a UTR maximum of 64 against the
+  server's 32), and that is the bug this arrangement exists to prevent.

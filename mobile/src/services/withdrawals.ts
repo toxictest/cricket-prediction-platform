@@ -25,5 +25,4 @@ export function listMyWithdrawals(filter: { status?: WithdrawalStatus; limit?: n
  * ever a *preview* of the answer it will get — the request is still rejected by
  * the server, and the app must show that rejection's message when it arrives.
  */
-export const MIN_RETAINED_TOKENS = 100;
-export const MINIMUM_BALANCE_MESSAGE = "Minimum 100 tokens must remain in wallet";
+export { MINIMUM_BALANCE_MESSAGE, MIN_RETAINED_TOKENS } from "../utils/validation";

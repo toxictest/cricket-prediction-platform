@@ -22,8 +22,8 @@
   },
   "devDependencies": {
     "@types/react": "~19.2.0",
-    "typescript": "~5.9.2",
-    "eas-cli": "^16.0.0"
+    "typescript": "~6.0.3",
+    "vitest": "^4.1.11"
   },
   "scripts": {
     "start": "expo start",
@@ -34,7 +34,9 @@
     "doctor": "npx expo-doctor",
     "prebuild:android": "expo prebuild --platform android --clean",
     "apk:local": "eas build --platform android --profile preview",
-    "apk:cloud": "eas build -p android --profile preview"
+    "apk:cloud": "eas build -p android --profile preview",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "private": true
 }

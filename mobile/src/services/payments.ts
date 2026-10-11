@@ -1,4 +1,5 @@
 import { apiGet, apiPost } from "../lib/api";
+import { MONEY_RULES } from "../utils/validation";
 import type {
   MyPaymentPage,
   PaymentQr,
@@ -40,11 +41,18 @@ export function listMyPayments(filter: { status?: PaymentStatus; limit?: number;
   return apiGet<MyPaymentPage>("/api/payment/my", { params });
 }
 
-/** Kept next to the client so the copy and the rule cannot drift apart. */
+/**
+ * Derived from `MONEY_RULES`, where every number names the backend file that owns it.
+ *
+ * The UTR maximum used to be written here as 64, because that is the length the route's
+ * own field permits — but `src/lib/bank-reference.ts` caps any bank reference at 32 and
+ * it is the service that answers, so a 40-character UTR was accepted by this app and
+ * refused by the server. That is the whole argument for one source of truth.
+ */
 export const PAYMENT_LIMITS = {
-  minAmount: 1,
-  maxAmount: 100000,
-  minUtrLength: 8,
-  maxUtrLength: 64,
-  maxOpenClaims: 5,
+  minAmount: MONEY_RULES.depositMinAmount,
+  maxAmount: MONEY_RULES.depositMaxAmount,
+  minUtrLength: MONEY_RULES.referenceMinLength,
+  maxUtrLength: MONEY_RULES.referenceMaxLength,
+  maxOpenClaims: MONEY_RULES.maxOpenClaims,
 } as const;

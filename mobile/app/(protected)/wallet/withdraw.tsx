@@ -18,6 +18,7 @@ import {
 } from "../../../src/services/withdrawals";
 import { errorMessage, toUiError } from "../../../src/lib/api";
 import { useWallet } from "../../../src/state/wallet";
+import { validateUpiId, validateWithdrawalAmount } from "../../../src/utils/validation";
 import { colors, spacing } from "../../../src/theme/theme";
 import { formatIndian, formatTokens, timeAgo } from "../../../src/utils/format";
 import { WITHDRAWAL_STATUS_LABELS } from "../../../src/utils/labels";
@@ -51,36 +52,18 @@ export default function WithdrawScreen() {
   const [older, setOlder] = useState<MyWithdrawalItem[]>([]);
 
   const winning = wallet?.winningBalance ?? 0;
-  const parsed = useMemo(() => {
-    const trimmed = amount.trim();
-    if (trimmed === "") return { value: null as number | null, error: "Enter how many tokens you want out." };
-    if (!/^\d+$/.test(trimmed)) return { value: null, error: "Tokens are whole numbers." };
-    const value = Number(trimmed);
-    if (value <= 0) return { value: null, error: "At least 1 token." };
-    if (value > winning) return { value: null, error: `You hold ${formatTokens(winning)} in winnings.` };
-    if (winning - value < MIN_RETAINED_TOKENS) {
-      return { value: null, error: MINIMUM_BALANCE_MESSAGE, floor: true };
-    }
-    return { value, error: null as string | null, floor: false };
-  }, [amount, winning]);
+  const parsed = useMemo(
+    () => validateWithdrawalAmount(amount, winning, formatTokens),
+    [amount, winning],
+  );
 
   /**
-   * Mirrors `normalizeUpiId` in the backend, which is stricter than it looks: one
-   * "@", at least two characters on each side, 320 in total. Checked here so a
-   * typo is caught before a payout request files and debits; the server still
-   * decides, and if the two ever disagree its message is the one shown.
+   * `validateUpiId` mirrors `normalizeUpiId` in the backend — one `@`, 2–256 before it,
+   * 2–64 after, 320 in total. Checked before a request files and debits, because a
+   * payout to an address that cannot be paid is a refund an admin has to notice. The
+   * server still decides; if the two ever disagree, its message is the one shown.
    */
-  const upiError = useMemo(() => {
-    const trimmed = upi.trim().toLowerCase();
-    if (trimmed === "") return "Your UPI id, like name@okhdfcbank.";
-    if (trimmed.length > 320) return "That is too long to be a UPI id.";
-    const parts = trimmed.split("@");
-    if (parts.length !== 2) return "A UPI id is exactly name@bank — one @, nothing after the handle.";
-    const [local, handle] = parts;
-    if (local.length < 2) return "The part before the @ is too short.";
-    if (handle.length < 2) return "The bank handle after the @ is too short.";
-    return null;
-  }, [upi]);
+  const upiError = useMemo(() => validateUpiId(upi), [upi]);
 
   const ready = parsed.value !== null && !parsed.error && !upiError;
 
