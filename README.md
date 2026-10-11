@@ -7,6 +7,11 @@ Members sign in with Google, a member record is provisioned in PostgreSQL with a
 auto-generated referral code, and the Download Center unlocks — gated by edge middleware *and*
 verified again on the server before a single byte of the APK is streamed.
 
+**Working on it?** [`DEVELOPMENT.md`](DEVELOPMENT.md) is the short day-to-day guide — local
+Postgres, the first admin, the deposit and payout queues, live-score updates — and
+[`docs/TESTING_CHECKLIST.md`](docs/TESTING_CHECKLIST.md) is the pass list to walk before calling a
+build good. This file is the full reference; `docs/SYSTEM_DESIGN.md` holds the design decisions.
+
 <p align="center">
   <img src="docs/screenshots/01-landing-hero.png" alt="Landing page hero" width="100%">
 </p>
@@ -877,7 +882,17 @@ CMD ["npm", "start"]
 | `npm run db:migrate` | `prisma migrate dev` | Create + apply a migration |
 | `npm run db:deploy` | `prisma migrate deploy` | Apply migrations (CI/prod) |
 | `npm run db:studio` | `prisma studio` | Data GUI |
-| `npm run db:reset` | `prisma migrate reset --force` | Drop and re-migrate (no data is inserted) |
+| `npm run db:setup` | `scripts/setup-dev-db.sh` | Install/start PostgreSQL, create role + databases, write `.env`, migrate |
+| `npm run db:reset` | `prisma migrate reset --force` | Drop and re-migrate, then run `npm run db:seed` |
+| `npm run db:seed` | `tsx scripts/seed.ts` | Create the first Super Admin from `ADMIN_EMAIL`/`ADMIN_PASSWORD`; optional `SEED_TEST_MATCH=1` test match |
+| `npm run admin:create-super` | `tsx scripts/create-super-admin.ts` | The same admin-creation code, run deliberately |
+| `npm test` | `vitest` | Watch mode |
+| `npm run test:run` | `vitest run` | One pass, then exit |
+| `npm run verify` | — | `typecheck` → `lint` → `test:run` → `build`; what CI should run |
+
+`db:reset` re-seeds because `prisma.seed` is wired to `db:seed`, and the seed is written to be
+harmless: with no `ADMIN_EMAIL`/`ADMIN_PASSWORD` it prints a warning and exits 0, and it never
+creates wallets, claims or approvals — so a reset database still contains no members.
 
 ---
 

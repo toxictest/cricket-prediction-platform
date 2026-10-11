@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { apiJson } from "@/lib/http";
+import { apiJson, logApiError } from "@/lib/http";
 import type { ApiError } from "@/types";
 import { MAX_PAGE_SIZE, WalletError, type WalletErrorCode } from "@/lib/wallet";
 
@@ -23,7 +23,9 @@ export function walletErrorResponse(error: unknown): NextResponse {
     return apiJson(body, error.status);
   }
 
-  console.error("[wallet] unexpected error:", error);
+  // Logged here, not left to `guardRoute`: this catch is what turns a bug into a
+  // 500, so it is also the last place that still knows the error was thrown.
+  logApiError("wallet", error);
   const body: WalletApiError = {
     ok: false,
     error: "Something went wrong. Please try again.",

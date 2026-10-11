@@ -11,6 +11,7 @@
     "db:migrate": "prisma migrate dev",
     "db:push": "prisma db push",
     "db:reset": "prisma migrate reset --force",
+    "db:seed": "tsx scripts/seed.ts",
     "db:setup": "bash scripts/setup-dev-db.sh",
     "db:setup:reset": "bash scripts/setup-dev-db.sh --reset",
     "db:studio": "prisma studio",
@@ -19,12 +20,15 @@
     "postinstall": "prisma generate",
     "start": "next start",
     "test": "vitest",
-    "test:integration": "vitest run tests/provisioning.test.ts tests/admin-auth.test.ts tests/admin-bootstrap.test.ts tests/wallet.test.ts tests/payment.test.ts tests/http-contract.test.ts",
+    "test:integration": "vitest run tests/provisioning.test.ts tests/admin-auth.test.ts tests/admin-bootstrap.test.ts tests/wallet.test.ts tests/payment.test.ts tests/withdrawal.test.ts tests/match.test.ts tests/me.test.ts tests/http-contract.test.ts",
     "test:run": "vitest run",
-    "test:unit": "vitest run tests/referral.test.ts tests/utils.test.ts tests/artifact.test.ts tests/stats.test.ts tests/wallet-http.test.ts tests/payment-http.test.ts",
+    "test:unit": "vitest run tests/referral.test.ts tests/utils.test.ts tests/artifact.test.ts tests/stats.test.ts tests/wallet-http.test.ts tests/payment-http.test.ts tests/withdrawal-http.test.ts tests/match-http.test.ts",
     "typecheck": "tsc --noEmit",
     "vercel-build": "prisma generate && prisma migrate deploy && next build",
     "verify": "npm run typecheck && npm run lint && npm run test:run && npm run build"
+  },
+  "prisma": {
+    "seed": "tsx scripts/seed.ts"
   },
   "dependencies": {
     "@prisma/client": "6.19.3",

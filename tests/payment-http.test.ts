@@ -145,7 +145,10 @@ describe("paymentErrorResponse", () => {
       error: "Something went wrong. Please try again.",
       code: "INTERNAL_ERROR",
     });
-    expect(consoleError).toHaveBeenCalledWith("[payment] unexpected error:", expect.any(Error));
+    expect(consoleError).toHaveBeenCalledTimes(1);
+    expect(String(consoleError.mock.calls[0]?.[0])).toMatch(
+      /^\[payment\] unhandled error: Error: connection refused/,
+    );
   });
 });
 

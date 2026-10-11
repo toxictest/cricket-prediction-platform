@@ -1,5 +1,5 @@
 import type { NextRequest } from "next/server";
-import { apiJson, featureDisabledResponse, readJsonBody } from "@/lib/http";
+import { apiSuccess, featureDisabledResponse, guardRoute, rateLimitedResponse, readJsonBody } from "@/lib/http";
 import { requireMember } from "@/lib/member-auth";
 import { MONEY_MODE_OFF_MESSAGE, moneyModeEnabled } from "@/lib/feature-flags";
 import { createPaymentRequest } from "@/lib/payment";
@@ -33,7 +33,7 @@ const claimLimiter = createRateLimiter({ limit: 10, windowMs: 60 * 60 * 1000 });
  *   429 too many claims from this member, or too many already pending
  *   503 money features switched off
  */
-export async function POST(request: NextRequest) {
+async function handlePOST(request: NextRequest) {
   const guard = await requireMember();
   if (!guard.ok) return guard.response;
 
@@ -49,21 +49,18 @@ export async function POST(request: NextRequest) {
 
   const throttle = claimLimiter.hit(guard.userId);
   if (!throttle.allowed) {
-    return apiJson(
-      {
-        ok: false,
-        error: "Too many claims from this account. Try again later.",
-        code: "RATE_LIMITED",
-      },
-      429,
-      { "Retry-After": String(throttle.retryAfterSeconds) },
-    );
+    return rateLimitedResponse("Too many claims from this account. Try again later.", throttle.retryAfterSeconds);
   }
 
   try {
     const receipt = await createPaymentRequest(guard.userId, payload.data);
-    return apiJson({ ok: true, data: receipt }, 201);
+    return apiSuccess(receipt, 201);
   } catch (error) {
     return paymentErrorResponse(error);
   }
 }
+
+// Each handler is wrapped: the domain mappers above own the expected failures, and
+// `guardRoute` catches anything else so the answer is still the JSON envelope.
+// Asserted for every route by tests/api-envelope.test.ts.
+export const POST = guardRoute("api/payment/request", handlePOST);

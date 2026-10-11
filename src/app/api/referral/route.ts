@@ -1,5 +1,6 @@
-import { NextResponse, type NextRequest } from "next/server";
+import type { NextRequest } from "next/server";
 import { z } from "zod";
+import { guardRoute, apiSuccess, errorResponse, rateLimitedResponse } from "@/lib/http";
 import { validateReferralCode } from "@/lib/referral";
 
 export const runtime = "nodejs";
@@ -71,12 +72,9 @@ function clientKey(request: NextRequest): string {
  * feedback while the invitee types. It reveals only the referrer's *first
  * name* — never their email, id or any other column.
  */
-export async function GET(request: NextRequest) {
+async function handleGET(request: NextRequest) {
   if (rateLimited(clientKey(request))) {
-    return NextResponse.json(
-      { ok: false, error: "Too many requests", code: "RATE_LIMITED" },
-      { status: 429, headers: { "Retry-After": "60" } },
-    );
+    return rateLimitedResponse("Too many requests", 60);
   }
 
   const parsed = querySchema.safeParse({
@@ -84,40 +82,34 @@ export async function GET(request: NextRequest) {
   });
 
   if (!parsed.success) {
-    return NextResponse.json(
-      {
-        ok: false,
-        error: parsed.error.issues[0]?.message ?? "Invalid code",
-        code: "VALIDATION_ERROR",
-      },
-      { status: 400 },
+    return errorResponse(
+      "VALIDATION_ERROR",
+      400,
+      parsed.error.issues[0]?.message ?? "Invalid code",
     );
   }
 
   const result = await validateReferralCode(parsed.data.code);
 
   if (!result.valid) {
-    return NextResponse.json(
-      {
-        ok: false,
-        error:
-          result.reason === "malformed"
-            ? "That referral code is not formatted correctly."
-            : "No member is using that referral code.",
-        code: "NOT_FOUND",
-        details: { code: result.code, reason: result.reason },
-      },
-      { status: 404 },
+    return errorResponse(
+      "NOT_FOUND",
+      404,
+      result.reason === "malformed"
+        ? "That referral code is not formatted correctly."
+        : "No member is using that referral code.",
+      { details: { code: result.code, reason: result.reason } },
     );
   }
 
   const firstName = result.referrerName.split(/\s+/)[0] ?? "A member";
 
-  return NextResponse.json(
-    {
-      ok: true,
-      data: { code: result.code, referrerFirstName: firstName },
-    },
-    { status: 200 },
-  );
+  // no-store, from apiJson: a cached "this code exists" answer would let a shared
+  // proxy keep a member's referral code alive for the next stranger.
+  return apiSuccess({ code: result.code, referrerFirstName: firstName });
 }
+
+// Each handler is wrapped: the domain mappers above own the expected failures, and
+// `guardRoute` catches anything else so the answer is still the JSON envelope.
+// Asserted for every route by tests/api-envelope.test.ts.
+export const GET = guardRoute("api/referral", handleGET);

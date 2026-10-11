@@ -483,3 +483,367 @@ describe.skipIf(!serverUp)("payment API (anonymous)", () => {
     }
   });
 });
+
+/* ==========================================================================
+   WITHDRAWAL API (anonymous callers)
+   ========================================================================== */
+
+describe.skipIf(!serverUp)("withdrawal API (anonymous)", () => {
+  const json = (body: unknown): RequestInit => ({
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+
+  it("GET /api/withdrawal/my → 401 JSON, and the history is never cached", async () => {
+    const res = await raw("/api/withdrawal/my?status=PENDING&limit=abc");
+
+    // Auth first, query validation second: an anonymous caller learns nothing
+    // about which parameters exist.
+    expect(res.status).toBe(401);
+    expect(res.headers.get("cache-control")).toBe("no-store");
+    expect(await res.json()).toMatchObject({ ok: false, code: "UNAUTHORIZED" });
+  });
+
+  it("POST /api/withdrawal/request → 401 before the payout is read or validated", async () => {
+    const res = await raw("/api/withdrawal/request", json({ amount: 500, upiId: "rahul@ybl" }));
+
+    // Nobody anonymous may file a claim on a balance, so a well-formed body and
+    // a malformed one must get the same answer.
+    expect(res.status).toBe(401);
+    expect(await res.json()).toMatchObject({ ok: false, code: "UNAUTHORIZED" });
+
+    const malformed = await raw("/api/withdrawal/request", json("{"));
+    expect(malformed.status).toBe(401);
+  });
+
+  it("does not let a GET reach the POST-only payout endpoint", async () => {
+    const res = await raw("/api/withdrawal/request");
+    expect(res.status).toBe(405);
+  });
+
+  it("GET /api/admin/withdrawals → 401 and no payout data", async () => {
+    const res = await raw("/api/admin/withdrawals?status=PENDING&limit=abc");
+
+    expect(res.status).toBe(401);
+    expect(res.headers.get("cache-control")).toBe("no-store");
+    expect(await res.json()).toMatchObject({ ok: false, code: "UNAUTHENTICATED" });
+  });
+
+  it.each(["approve", "reject"])("POST /api/admin/withdrawals/:id/%s → 401", async (action) => {
+    const res = await raw(`/api/admin/withdrawals/some-request-id/${action}`, json({}));
+
+    expect(res.status).toBe(401);
+    expect(await res.json()).toMatchObject({ ok: false, code: "UNAUTHENTICATED" });
+  });
+
+  it("does not let a GET reach a POST-only review action", async () => {
+    for (const action of ["approve", "reject"]) {
+      const res = await raw(`/api/admin/withdrawals/some-request-id/${action}`);
+      expect(res.status).toBe(405);
+    }
+  });
+});
+
+/* ==========================================================================
+   MATCH API
+   ========================================================================== */
+
+describe.skipIf(!serverUp)("match API (public reads)", () => {
+  /** These checks must hold on an empty database, so none of them needs a fixture. */
+  it("GET /api/matches → 200, public, and cacheable for a few seconds", async () => {
+    const res = await raw("/api/matches");
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.ok).toBe(true);
+    expect(Array.isArray(body.data.items)).toBe(true);
+    expect(body.data.order).toBe("desc");
+
+    // A match list is the same for everyone, so it is the one response in this
+    // area that may be cached. Everything personal in the API is `no-store`.
+    const cache = res.headers.get("cache-control") ?? "";
+    expect(cache).toContain("public");
+    expect(cache).toContain("max-age=");
+    expect(cache).not.toContain("no-store");
+    expect(res.headers.get("etag")).toBeTruthy();
+  });
+
+  it("never returns the payment QR or the feed id to an anonymous reader", async () => {
+    const res = await raw("/api/matches");
+    // Asserted on the raw bytes, not the parsed object: the point is that the
+    // field is never put on the wire at all.
+    const text = await res.text();
+    expect(text).not.toMatch(/qrCodeUrl/i);
+    expect(text).not.toMatch(/externalId/i);
+  });
+
+  it("GET /api/matches/live → 200 with an ETag, and 304 on a revalidation", async () => {
+    const first = await raw("/api/matches/live");
+    expect(first.status).toBe(200);
+    const etag = first.headers.get("etag");
+    expect(etag).toBeTruthy();
+
+    const second = await raw("/api/matches/live", { headers: { "If-None-Match": etag ?? "" } });
+    expect(second.status).toBe(304);
+    expect(second.headers.get("etag")).toBe(etag);
+    expect(await second.text()).toBe("");
+  });
+
+  it("rejects a bad page and a private parameter instead of ignoring it", async () => {
+    const bad = await raw("/api/matches?limit=0");
+    expect(bad.status).toBe(400);
+    expect(await bad.json()).toMatchObject({ ok: false, code: "VALIDATION_ERROR" });
+
+    const search = await raw("/api/matches?q=kings");
+    expect(search.status).toBe(400);
+    expect(await search.json()).toMatchObject({
+      code: "VALIDATION_ERROR",
+      error: "Search is available on the admin match list only",
+    });
+  });
+
+  it("answers 404 for a match that is not there, on both public read shapes", async () => {
+    for (const path of [
+      "/api/matches/000000000000000000000000",
+      "/api/matches/000000000000000000000000/score",
+    ]) {
+      const res = await raw(path);
+      expect(res.status).toBe(404);
+      expect(await res.json()).toMatchObject({ ok: false, code: "MATCH_NOT_FOUND" });
+    }
+  });
+
+  it("does not accept writes on the public routes", async () => {
+    const list = await raw("/api/matches", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "{}",
+    });
+    expect(list.status).toBe(405);
+
+    const score = await raw("/api/matches/live/score", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "{}",
+    });
+    expect(score.status).toBe(405);
+  });
+});
+
+describe.skipIf(!serverUp)("match API (anonymous admin callers)", () => {
+  const json = (method: string, body: unknown): RequestInit => ({
+    method,
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+
+  it("GET /api/admin/matches → 401 and no fixture data", async () => {
+    const res = await raw("/api/admin/matches?status=LIVE&limit=abc");
+
+    expect(res.status).toBe(401);
+    expect(res.headers.get("cache-control")).toBe("no-store");
+    expect(await res.json()).toMatchObject({ ok: false, code: "UNAUTHENTICATED" });
+  });
+
+  it("POST /api/admin/matches → 401 before the body is read", async () => {
+    const res = await raw(
+      "/api/admin/matches",
+      json("POST", { title: "Secret XI vs Also Secret XI", teamA: "a", teamB: "b", startTime: "2026-11-01T10:00:00Z" }),
+    );
+    expect(res.status).toBe(401);
+
+    const malformed = await raw("/api/admin/matches", json("POST", "{"));
+    expect(malformed.status).toBe(401);
+  });
+
+  it("PATCH /api/admin/matches/:id and POST …/score → 401", async () => {
+    const patch = await raw("/api/admin/matches/some-match-id", json("PATCH", { status: "LIVE" }));
+    expect(patch.status).toBe(401);
+
+    const score = await raw(
+      "/api/admin/matches/some-match-id/score",
+      json("POST", { teamAScore: "1/0", teamBScore: "0/0", currentOver: "1.0" }),
+    );
+    expect(score.status).toBe(401);
+  });
+
+  it("has no read or delete surface on the single-match admin route", async () => {
+    for (const method of ["GET", "DELETE", "PUT"]) {
+      const res = await raw("/api/admin/matches/some-match-id", { method });
+      expect(res.status).toBe(405);
+    }
+  });
+
+  it("does not let a GET reach the POST-only score route", async () => {
+    const res = await raw("/api/admin/matches/some-match-id/score");
+    expect(res.status).toBe(405);
+  });
+});
+
+/* ==========================================================================
+   MEMBER SNAPSHOT
+   ========================================================================== */
+
+describe.skipIf(!serverUp)("GET /api/me and the member-facing surface", () => {
+  it("answers a guest with 401 and no hint of a wallet", async () => {
+    const res = await raw("/api/me");
+    const body = await res.json();
+
+    expect(res.status).toBe(401);
+    expect(body).toMatchObject({ ok: false, code: "UNAUTHORIZED" });
+    expect(res.headers.get("cache-control")).toBe("no-store");
+    expect(JSON.stringify(body)).not.toMatch(/balance|wallet/i);
+  });
+
+  it("refuses a write: /api/me is a read", async () => {
+    const res = await raw("/api/me", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: "renamed by a POST" }),
+    });
+    expect(res.status).toBe(405);
+  });
+
+  /**
+   * The protection rule for the six member-facing reads, stated where it can be
+   * seen: the three that are personal answer 401 to an anonymous caller, and the
+   * three about the fixture calendar answer 200. A match page is public by design;
+   * a balance is not.
+   */
+  it("protects what is personal and leaves what is not open", async () => {
+    const personal = ["/api/me", "/api/wallet", "/api/wallet/transactions"];
+    for (const path of personal) {
+      const res = await raw(path);
+      expect([res.status, path]).toEqual([401, path]);
+      expect(res.headers.get("cache-control"), path).toBe("no-store");
+    }
+
+    const publicPaths = ["/api/matches", "/api/matches/live", "/api/matches?limit=1"];
+    for (const path of publicPaths) {
+      const res = await raw(path);
+      expect([res.status, path]).toEqual([200, path]);
+      expect(res.headers.get("cache-control"), path).not.toContain("no-store");
+    }
+  });
+});
+
+/* ==========================================================================
+   ADMIN PANEL PAGES
+   ========================================================================== */
+
+describe.skipIf(!serverUp)("admin panel pages (anonymous browser)", () => {
+  /**
+   * The pages are guarded by a layout, not by `middleware.ts` — middleware only
+   * knows the member session. So the panel's wall has to be visible from outside.
+   *
+   * The mechanism is Next's, not ours: a *document* request that meets
+   * `redirect()` inside a Server Component comes back as a 200 whose HTML hands
+   * the browser over with `<meta http-equiv="refresh">`, while a client-side
+   * navigation receives a 307. Both spellings are asserted as one contract — you
+   * end up at the sign-in page, and none of the queue is in the bytes you got.
+   */
+  async function expectHandoffToLogin(path: string, words: RegExp = /Deposit claims|Payout requests|referralCode|Approve claim/i) {
+    const res = await raw(path);
+    const body = await res.text();
+    const location = res.headers.get("location") ?? "";
+    const handedOver =
+      ([301, 302, 303, 307, 308].includes(res.status) && /\/admin\/(login|dashboard)/.test(location)) ||
+      (res.status === 200 && /url=\/admin\/login/.test(body));
+    expect([handedOver, path]).toEqual([true, path]);
+    expect(body, path).not.toMatch(words);
+  }
+
+  it.each(["/admin", "/admin/dashboard", "/admin/payments", "/admin/payments?status=PENDING"])(
+    "%s cannot be read without a session",
+    async (path) => {
+      await expectHandoffToLogin(path);
+    },
+  );
+
+  it("never lets a guarded page be cached, so a proxy cannot keep it alive past sign-out", async () => {
+    const res = await raw("/admin/dashboard");
+    expect((res.headers.get("cache-control") ?? "").toLowerCase()).toContain("no-store");
+  });
+
+  it("serves the sign-in page itself, and tells crawlers to stay away from the whole subtree", async () => {
+    const res = await raw("/admin/login");
+    expect(res.status).toBe(200);
+    const html = await res.text();
+    expect(html).toMatch(/Back office/);
+    expect(html).toMatch(/type="password"/);
+    expect(html).toMatch(/name="email"/);
+    // Metadata `robots: { index: false }` on the /admin layout reaches the HTML as a
+    // meta tag (Next does not raise an X-Robots-Tag header for metadata).
+    expect(html).toMatch(/<meta name="robots" content="noindex, nofollow"/);
+    // No admin identity, and nothing an autofiller would happily fill in.
+    expect(html).not.toMatch(/SUPER_ADMIN|PAYMENT_ADMIN/);
+    // Password managers get the right hint; nothing here is a member login form.
+    // React writes the prop name through (`autoComplete=`); HTML attribute names
+    // are case-insensitive, so the assertion has to be too.
+    expect(html).toMatch(/autocomplete="current-password"/i);
+  });
+
+  it("404s an unknown admin path instead of treating the guard as a catch-all", async () => {
+    const res = await raw("/admin/definitely-not-a-page");
+    expect(res.status).toBe(404);
+  });
+
+  it("still refuses the guarded APIs with JSON, so a page handoff never masks an endpoint", async () => {
+    const res = await raw("/api/admin/payments", { headers: { accept: "application/json" } });
+    expect(res.status).toBe(401);
+    expect(await res.json()).toMatchObject({ ok: false });
+  });
+
+  it("hands a stale cookie to the sign-in page rather than rendering a half-built queue", async () => {
+    await expectHandoffToLogin("/admin/dashboard", /Deposit claims|Good to see you/);
+  });
+});
+
+/**
+ * Optional, and the only test here that proves a real session unlocks a real page.
+ * Needs a seeded admin, so it stays out of the way of a clean checkout:
+ *
+ *   ADMIN_TEST_EMAIL=ops@example.com ADMIN_TEST_PASSWORD='…' npm test
+ */
+const adminEmail = process.env.ADMIN_TEST_EMAIL;
+const adminPassword = process.env.ADMIN_TEST_PASSWORD;
+const canSignIn = Boolean(serverUp && adminEmail && adminPassword);
+
+describe.skipIf(!canSignIn)("admin panel pages (signed-in admin)", () => {
+  async function sessionCookie(): Promise<string> {
+    const res = await fetch(`${BASE}/api/admin/login`, {
+      method: "POST",
+      headers: { "content-type": "application/json", accept: "application/json" },
+      body: JSON.stringify({ email: adminEmail, password: adminPassword }),
+      redirect: "manual",
+    });
+    if (res.status !== 200) throw new Error(`login returned ${res.status}`);
+    const setCookie = (res.headers.getSetCookie?.() ?? [res.headers.get("set-cookie") ?? ""]).find((entry) =>
+      /cpc_admin_session=/.test(entry),
+    );
+    if (!setCookie) throw new Error("no admin session cookie in the login response");
+    return setCookie.split(";")[0] as string;
+  }
+
+  it("renders the dashboard for a valid session, and never the sign-in form", async () => {
+    const cookie = await sessionCookie();
+    const res = await raw("/admin/dashboard", { headers: { cookie } });
+    expect(res.status).toBe(200);
+    const html = await res.text();
+    expect(html).toMatch(/control panel/i);
+    expect(html).not.toMatch(/type="password"/);
+  });
+
+  it("keeps the session cookie HttpOnly and SameSite=strict", async () => {
+    const res = await fetch(`${BASE}/api/admin/login`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ email: adminEmail, password: adminPassword }),
+      redirect: "manual",
+    });
+    const setCookie = (res.headers.getSetCookie?.() ?? []).join(" | ");
+    expect(setCookie).toMatch(/HttpOnly/i);
+    expect(setCookie.toLowerCase()).toMatch(/samesite=strict/);
+  });
+});

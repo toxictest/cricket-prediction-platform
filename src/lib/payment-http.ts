@@ -1,10 +1,9 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import type { ApiError } from "@/types";
-import { apiJson } from "@/lib/http";
+import { apiJson, logApiError, parseQueueQuery, type QueueQuery } from "@/lib/http";
 import { WalletError, type WalletErrorCode } from "@/lib/wallet";
 import {
-  MAX_PAGE_SIZE,
   MAX_REVIEW_NOTE_LENGTH,
   MIN_REVIEW_NOTE_LENGTH,
   PaymentError,
@@ -43,7 +42,9 @@ export function paymentErrorResponse(error: unknown): NextResponse {
     );
   }
 
-  console.error("[payment] unexpected error:", error);
+  // Logged here, not left to `guardRoute`: this catch is what turns a bug into a
+  // 500, so it is also the last place that still knows the error was thrown.
+  logApiError("payment", error);
   const body: PaymentApiError = {
     ok: false,
     error: "Something went wrong. Please try again.",
@@ -54,39 +55,15 @@ export function paymentErrorResponse(error: unknown): NextResponse {
 
 /* ==========================================================================
    QUERY PARSING — GET /api/admin/payments
+   ==========================================================================
+
+   The parser itself is shared with the payout queue (`parseQueueQuery` in
+   `src/lib/http.ts`); this wrapper only keeps the payment-facing name and type.
    ========================================================================== */
 
-const listQuerySchema = z.object({
-  status: z.enum(["PENDING", "APPROVED", "REJECTED"]).optional(),
-  userId: z.string().trim().min(1).max(64).optional(),
-  limit: z.coerce.number().int().min(1).max(MAX_PAGE_SIZE).optional(),
-  cursor: z.string().min(1).max(200).optional(),
-});
+export type PaymentListQuery = QueueQuery;
 
-export type PaymentListQuery = z.infer<typeof listQuerySchema>;
-
-export function parseListQuery(
-  params: URLSearchParams,
-): { ok: true; data: PaymentListQuery } | { ok: false; response: NextResponse } {
-  const parsed = listQuerySchema.safeParse({
-    status: params.get("status") ?? undefined,
-    userId: params.get("userId") ?? undefined,
-    limit: params.get("limit") ?? undefined,
-    cursor: params.get("cursor") ?? undefined,
-  });
-
-  if (!parsed.success) {
-    const body: PaymentApiError = {
-      ok: false,
-      error: "Invalid query parameters",
-      code: "VALIDATION_ERROR",
-      details: parsed.error.flatten(),
-    };
-    return { ok: false, response: apiJson(body, 400) };
-  }
-
-  return { ok: true, data: parsed.data };
-}
+export const parseListQuery = parseQueueQuery;
 
 /* ==========================================================================
    BODY PARSING

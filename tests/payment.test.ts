@@ -51,6 +51,12 @@ const db = await prisma
  * `getActivePaymentQr` has no filter of its own: it looks for the newest match
  * with a QR. So the selection tests only make sense on a queue nobody else has
  * written to. Rather than deleting other people's fixtures, they skip.
+ *
+ * Since the match change, `tests/match.test.ts` writes to the same table in a
+ * parallel worker, so these four may skip in a full-suite run and pass when the
+ * file runs on its own (`vitest run tests/payment.test.ts`). That is the guard
+ * doing its job, not a failure: a selection test that could not see the whole
+ * table would only be testing its own memory of what it inserted.
  */
 const matchesTableEmpty =
   db &&
@@ -682,7 +688,11 @@ describe.skipIf(!db || !matchesTableEmpty)("the payment QR", () => {
 
   it("skips a match whose QR was cleared, and ignores finished matches", async () => {
     await clearFixtures();
-    await newMatch({ status: "LIVE", tag: "blank", qr: "   ", minutesFromNow: -1 });
+    // A cleared QR is always NULL, never "". The `matches_qr_url_not_blank` check
+    // added with match management makes an empty or whitespace-only URL impossible
+    // to store, and `normalizeQrCodeUrl` collapses both to null on the way in.
+    // `getActivePaymentQr` keeps its `gt: ""` filter as a cheap guard for any row
+    // that predates the check.
     await newMatch({ status: "LIVE", tag: "null-qr", qr: null, minutesFromNow: -2 });
     await newMatch({ status: "COMPLETED", tag: "finished", minutesFromNow: -900 });
     await newMatch({ status: "UPCOMING", tag: "usable", minutesFromNow: 45 });

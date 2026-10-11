@@ -1,9 +1,10 @@
 import type { NextRequest } from "next/server";
 import type { Role } from "@prisma/client";
-import { adminJson, requireAdmin } from "@/lib/admin-guard";
+import { adminErrorResponse, adminJson, requireAdmin } from "@/lib/admin-guard";
 import { prisma } from "@/lib/prisma";
 import { getTransactionHistory, getWallet } from "@/lib/wallet";
 import { parseHistoryQuery, walletErrorResponse } from "@/lib/wallet-http";
+import { guardRoute } from "@/lib/http";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -17,7 +18,7 @@ const WALLET_READ_ROLES: Role[] = ["SUPER_ADMIN", "PAYMENT_ADMIN", "SUPPORT_ADMI
  * Read-only view of one member: profile, balances, and a page of ledger rows.
  * It does not change any data. Reads are not written to an audit log yet.
  */
-export async function GET(
+async function handleGET(
   request: NextRequest,
   context: { params: Promise<{ userId: string }> },
 ) {
@@ -41,10 +42,7 @@ export async function GET(
   });
 
   if (!user) {
-    return adminJson(
-      { ok: false, error: "Member not found", code: "NOT_FOUND" },
-      404,
-    );
+    return adminErrorResponse("NOT_FOUND", 404, "Member not found");
   }
 
   try {
@@ -58,3 +56,8 @@ export async function GET(
     return walletErrorResponse(error);
   }
 }
+
+// Each handler is wrapped: the domain mappers above own the expected failures, and
+// `guardRoute` catches anything else so the answer is still the JSON envelope.
+// Asserted for every route by tests/api-envelope.test.ts.
+export const GET = guardRoute("api/admin/wallet/[userId]", handleGET);

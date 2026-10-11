@@ -2,7 +2,7 @@ import { NextRequest } from "next/server";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { normalizeEmail } from "@/lib/user";
-import { adminJson } from "@/lib/admin-guard";
+import { adminErrorResponse, adminJson } from "@/lib/admin-guard";
 import {
   getUnknownUserHash,
   verifyAdminPassword,
@@ -17,6 +17,7 @@ import {
   signAdminToken,
 } from "@/lib/admin-session";
 import { createRateLimiter } from "@/lib/rate-limit";
+import { guardRoute } from "@/lib/http";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -37,30 +38,25 @@ const loginSchema = z.object({
 });
 
 /** One message for every credential failure, so the response does not reveal which part was wrong. */
-const INVALID_CREDENTIALS = {
-  ok: false,
-  error: "Invalid email or password.",
-  code: "INVALID_CREDENTIALS",
-} as const;
+function invalidCredentials(): ReturnType<typeof adminErrorResponse> {
+  return adminErrorResponse("INVALID_CREDENTIALS", 401, "Invalid email or password.");
+}
 
 /**
  * POST /api/admin/login
  * Body: { email, password }. On success, sets the admin session cookie and
  * returns the admin's details and roles.
  */
-export async function POST(request: NextRequest) {
+async function handlePOST(request: NextRequest) {
   try {
     getAdminSessionSecret();
   } catch (error) {
     // Logged for the operator. The client gets a generic message, with no hint about the environment.
     console.error("[admin-login]", error instanceof Error ? error.message : error);
-    return adminJson(
-      {
-        ok: false,
-        error: "Admin sign-in is not configured.",
-        code: "ADMIN_NOT_CONFIGURED",
-      },
+    return adminErrorResponse(
+      "ADMIN_NOT_CONFIGURED",
       500,
+      "Admin sign-in is not configured.",
     );
   }
 
@@ -68,13 +64,10 @@ export async function POST(request: NextRequest) {
   // JSON closes that path to forced sign-in (login CSRF).
   const contentType = request.headers.get("content-type") ?? "";
   if (!contentType.toLowerCase().startsWith("application/json")) {
-    return adminJson(
-      {
-        ok: false,
-        error: "Send the request as application/json.",
-        code: "UNSUPPORTED_MEDIA_TYPE",
-      },
+    return adminErrorResponse(
+      "UNSUPPORTED_MEDIA_TYPE",
       415,
+      "Send the request as application/json.",
     );
   }
 
@@ -82,21 +75,16 @@ export async function POST(request: NextRequest) {
   try {
     body = await request.json();
   } catch {
-    return adminJson(
-      { ok: false, error: "Request body must be JSON.", code: "INVALID_JSON" },
-      400,
-    );
+    return adminErrorResponse("INVALID_JSON", 400, "Request body must be JSON.");
   }
 
   const parsed = loginSchema.safeParse(body);
   if (!parsed.success) {
-    return adminJson(
-      {
-        ok: false,
-        error: parsed.error.issues[0]?.message ?? "Invalid input.",
-        code: "VALIDATION_ERROR",
-      },
+    return adminErrorResponse(
+      "VALIDATION_ERROR",
       400,
+      parsed.error.issues[0]?.message ?? "Invalid input.",
+      { details: parsed.error.flatten() },
     );
   }
 
@@ -109,13 +97,10 @@ export async function POST(request: NextRequest) {
   ].find((decision) => !decision.allowed);
 
   if (throttle && !throttle.allowed) {
-    return adminJson(
-      {
-        ok: false,
-        error: "Too many sign-in attempts. Try again later.",
-        code: "RATE_LIMITED",
-      },
+    return adminErrorResponse(
+      "RATE_LIMITED",
       429,
+      "Too many sign-in attempts. Try again later.",
       { headers: { "Retry-After": String(throttle.retryAfterSeconds) } },
     );
   }
@@ -141,7 +126,7 @@ export async function POST(request: NextRequest) {
 
   // Unknown email, wrong password and deactivated account all get the same answer.
   if (!admin || !admin.isActive || !passwordMatches) {
-    return adminJson(INVALID_CREDENTIALS, 401);
+    return invalidCredentials();
   }
 
   const session = await createAdminSession({
@@ -181,3 +166,8 @@ export async function POST(request: NextRequest) {
   );
   return response;
 }
+
+// Each handler is wrapped: the domain mappers above own the expected failures, and
+// `guardRoute` catches anything else so the answer is still the JSON envelope.
+// Asserted for every route by tests/api-envelope.test.ts.
+export const POST = guardRoute("api/admin/login", handlePOST);

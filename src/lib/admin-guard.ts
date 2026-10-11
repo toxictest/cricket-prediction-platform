@@ -1,5 +1,6 @@
 import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
+import type { ApiError, ApiSuccess } from "@/types";
 import type { Role } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import {
@@ -45,13 +46,23 @@ export type AdminGuardResult =
   | { ok: true; admin: AdminPrincipal }
   | { ok: false; response: NextResponse };
 
-export async function requireAdmin(roles?: Role[]): Promise<AdminGuardResult> {
+/**
+ * The verification half of the guard: cookie → JWT → session row → admin, with no
+ * role decision and no HTTP in it. `requireAdmin` wraps it in responses; the page
+ * helpers in `src/lib/admin-web.ts` wrap it in a redirect. Keeping it shared means
+ * a page and an API route can never disagree about who is signed in.
+ */
+export type AdminSessionLookup =
+  | { ok: true; admin: AdminPrincipal }
+  | { ok: false; clearCookie: boolean };
+
+export async function readAdminSession(): Promise<AdminSessionLookup> {
   const jar = await cookies();
   const token = jar.get(adminCookieName())?.value;
-  if (!token) return unauthenticated();
+  if (!token) return { ok: false, clearCookie: false };
 
   const claims = await verifyAdminToken(token);
-  if (!claims) return unauthenticated({ clearCookie: true });
+  if (!claims) return { ok: false, clearCookie: true };
 
   const session = await prisma.adminSession.findUnique({
     where: { id: claims.sessionId },
@@ -79,13 +90,10 @@ export async function requireAdmin(roles?: Role[]): Promise<AdminGuardResult> {
     session.expiresAt.getTime() <= Date.now() ||
     !session.admin.isActive
   ) {
-    return unauthenticated({ clearCookie: true });
+    return { ok: false, clearCookie: true };
   }
 
   const { admin } = session;
-  if (roles && roles.length > 0 && !roles.some((role) => admin.roles.includes(role))) {
-    return forbidden();
-  }
 
   return {
     ok: true,
@@ -99,6 +107,87 @@ export async function requireAdmin(roles?: Role[]): Promise<AdminGuardResult> {
       sessionExpiresAt: session.expiresAt,
     },
   };
+}
+
+/**
+ * The admin behind the cookie, or `null`. For server components and pages, which
+ * have no response object to return and would rather redirect or hide a section.
+ *
+ * A lookup failure that is not "no session" — an unset `ADMIN_SESSION_SECRET`,
+ * which `verifyAdminToken` surfaces by throwing — is reported as `null` and
+ * logged. A page must not 500 over a configuration fault: it sends the operator to
+ * the sign-in screen, whose own request reports the fault in words.
+ */
+export async function getAdminPrincipal(): Promise<AdminPrincipal | null> {
+  try {
+    const found = await readAdminSession();
+    return found.ok ? found.admin : null;
+  } catch (error) {
+    console.warn(
+      "[admin-guard] page lookup failed:",
+      error instanceof Error ? error.message : error,
+    );
+    return null;
+  }
+}
+
+export async function requireAdmin(roles?: Role[]): Promise<AdminGuardResult> {
+  const found = await readAdminSession();
+  if (!found.ok) {
+    return found.clearCookie ? unauthenticated({ clearCookie: true }) : unauthenticated();
+  }
+
+  const { admin } = found;
+  if (roles && roles.length > 0 && !roles.some((role) => admin.roles.includes(role))) {
+    return forbidden();
+  }
+
+  return { ok: true, admin };
+}
+
+/**
+ * The admin half of the response vocabulary: the shared envelope plus the codes
+ * only staff endpoints raise. `Omit<ApiError, "code">` rather than
+ * `ApiError & { code: ... }` on purpose — intersecting the two would keep only
+ * the codes they share, and `UNAUTHENTICATED` would compile to `never`. Widening a shared type per surface (here and in
+ * `payment-http.ts`) is what keeps a typo in a `code` a compile error instead of
+ * a client that silently falls into its generic branch.
+ */
+export type AdminApiError = Omit<ApiError, "code"> & {
+  code:
+    | ApiError["code"]
+    /** No cookie, a cookie that will not verify, or a revoked session. */
+    | "UNAUTHENTICATED"
+    /** The password or the account is wrong. Never says which. */
+    | "INVALID_CREDENTIALS"
+    /** `ADMIN_SESSION_SECRET` is missing, short or still the placeholder. */
+    | "ADMIN_NOT_CONFIGURED";
+};
+
+/** An admin error body, built once so the shape and the `no-store` cannot drift. */
+export function adminErrorResponse(
+  code: AdminApiError["code"],
+  status: number,
+  error: string,
+  options: { details?: unknown; clearCookie?: boolean; headers?: Record<string, string> } = {},
+): NextResponse {
+  const body: AdminApiError = {
+    ok: false,
+    error,
+    code,
+    ...(options.details === undefined ? {} : { details: options.details }),
+  };
+  return adminJson(body, status, { clearCookie: options.clearCookie, headers: options.headers });
+}
+
+/** Success body for admin endpoints, so a route does not hand-roll `{ ok: true }`. */
+export function adminSuccess<T>(
+  data: T,
+  status = 200,
+  options: { headers?: Record<string, string> } = {},
+): NextResponse {
+  const body: ApiSuccess<T> = { ok: true, data };
+  return adminJson(body, status, options);
 }
 
 /**
@@ -123,13 +212,10 @@ export function adminJson(
 function unauthenticated(options: { clearCookie?: boolean } = {}): AdminGuardResult {
   return {
     ok: false,
-    response: adminJson(
-      {
-        ok: false,
-        error: "Sign in as an administrator to continue.",
-        code: "UNAUTHENTICATED",
-      },
+    response: adminErrorResponse(
+      "UNAUTHENTICATED",
       401,
+      "Sign in as an administrator to continue.",
       options,
     ),
   };
@@ -138,13 +224,10 @@ function unauthenticated(options: { clearCookie?: boolean } = {}): AdminGuardRes
 function forbidden(): AdminGuardResult {
   return {
     ok: false,
-    response: adminJson(
-      {
-        ok: false,
-        error: "Your admin account does not have access to this action.",
-        code: "FORBIDDEN",
-      },
+    response: adminErrorResponse(
+      "FORBIDDEN",
       403,
+      "Your admin account does not have access to this action.",
     ),
   };
 }

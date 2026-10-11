@@ -275,9 +275,12 @@ model WithdrawalRequest {
 
   userId String @map("user_id")
 
-  /// Amount requested, in INR.
+  /// Tokens taken from `winningBalance` when the request was filed. Debits are
+  /// in tokens, not rupees: at the current 1:1 rate the numbers are equal, but
+  /// only the token figure is authoritative.
   amount Int
 
+  /// The member's VPA, e.g. "name@bank". The payout destination.
   upiId String @map("upi_id")
 
   status WithdrawalStatus @default(PENDING)
@@ -297,6 +300,11 @@ model WithdrawalRequest {
   user       User       @relation(fields: [userId], references: [id])
   reviewedBy AdminUser? @relation("WithdrawalReviewedBy", fields: [reviewedById], references: [id])
 
+  /// A member's own payout history, newest first, and the pending-count check
+  /// that runs before a new request is accepted.
+  @@index([userId, createdAt])
+  /// The payout queue, filtered by status and read in request order.
+  @@index([status, createdAt])
   @@map("withdrawal_requests")
 }
 
@@ -304,18 +312,32 @@ model WithdrawalRequest {
 model Match {
   id String @id @default(cuid())
 
+  /// Fixture label shown to members, e.g. "India vs Australia, 3rd T20I".
   title String
 
+  /// Normalised on write: trimmed, inner spaces collapsed, compared
+  /// case-insensitively. A match must not name the same team twice.
   teamA String @map("team_a")
 
   teamB String @map("team_b")
 
+  /// When play starts. Predictions lock at this instant and the deposit QR is
+  /// chosen from the newest LIVE match, so a wrong value is not cosmetic.
   startTime DateTime @map("start_time") @db.Timestamptz(3)
 
   status MatchStatus @default(UPCOMING)
 
-  /// Optional QR image URL for this match.
+  /// QR image URL for this match. `NULL` or absent means no QR is configured;
+  /// an empty string is refused by a CHECK so the two cases never have to be
+  /// told apart. This is the address money is sent to, so it is never returned
+  /// by a public endpoint — members get it from `GET /api/payment/qr`, which is
+  /// member-only and gated on `MONEY_MODE`.
   qrCodeUrl String? @map("qr_code_url")
+
+  /// A score provider's own match id, when a feed is wired up. Unique, so an
+  /// ingest job can be re-run for the same fixture without creating a second
+  /// row. Null for matches created by hand in the admin console.
+  externalId String? @unique @map("external_id")
 
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
 
@@ -324,6 +346,10 @@ model Match {
   // ---- relations ----
   liveScore LiveScore?
 
+  /// "What is live / upcoming?" — the two lists a client polls.
+  @@index([status, startTime])
+  /// Public archive paging, ordered by start time in either direction.
+  @@index([startTime])
   @@map("matches")
 }
 
@@ -333,20 +359,36 @@ model LiveScore {
 
   matchId String @unique @map("match_id")
 
-  /// Display string such as "182/4". Structured numbers are recommended (see docs/SYSTEM_DESIGN.md).
+  /// Display string "runs/wickets", e.g. "182/4". The shape is fixed by a CHECK
+  /// so a poller never has to guess what a stored value means. Structured
+  /// integers are still the recommendation (docs/SYSTEM_DESIGN.md §5.5); until
+  /// they land, one canonical shape and a monotonic rule in `src/lib/match.ts`
+  /// keep the scoreboard honest.
   teamAScore String @default("0/0") @map("team_a_score")
 
   /// Display string such as "165/9".
   teamBScore String @default("0/0") @map("team_b_score")
 
-  /// Display string such as "16.3".
+  /// Overs bowled as `<overs>.<balls>`, e.g. "16.3". The balls digit is 0-5,
+  /// which the CHECK enforces, because "16.9" is not an over.
   currentOver String @default("0.0") @map("current_over")
 
+  /// Free-form but shape-checked: one object, or up to two for the batters at
+  /// the crease. Keys are bounded by the service, so a client cannot grow this
+  /// column without limit.
   batsmanStats Json? @map("batsman_stats")
 
+  /// The bowler currently in the attack, same rules.
   bowlerStats Json? @map("bowler_stats")
 
+  /// Bumped with every accepted write. Two scorers with the same scoreboard
+  /// open are serialised on it: the second one is told its copy is stale
+  /// instead of quietly overwriting the first (docs/SYSTEM_DESIGN.md §6.2).
+  version Int @default(1)
+
   lastUpdatedById String? @map("last_updated_by_id")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
 
   updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
 

@@ -4,6 +4,7 @@ import { stat } from "fs/promises";
 import path from "path";
 import { Readable } from "stream";
 import { NextResponse, type NextRequest } from "next/server";
+import { guardRoute, errorResponse } from "@/lib/http";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { recordDownload } from "@/lib/user";
@@ -76,20 +77,19 @@ async function findArtifact(): Promise<{ filePath: string; size: number } | null
  * Every successful download is written to `download_logs` before the bytes
  * start flowing.
  */
-export async function GET(request: NextRequest) {
+async function handleGET(request: NextRequest) {
   // ---------------------------------------------------------------------
   // 1. Authentication
   // ---------------------------------------------------------------------
   const session = await getServerSession(authOptions);
 
   if (!session?.user?.id) {
-    return NextResponse.json(
-      {
-        ok: false,
-        error: "Access restricted. Please activate your account first.",
-        code: "UNAUTHORIZED",
-      },
-      { status: 401, headers: { "Cache-Control": "no-store" } },
+    // Not `unauthorizedResponse()`: this route's wording points a member at the
+    // activation step, and the shipped APK shows it verbatim.
+    return errorResponse(
+      "UNAUTHORIZED",
+      401,
+      "Access restricted. Please activate your account first.",
     );
   }
 
@@ -127,20 +127,11 @@ export async function GET(request: NextRequest) {
     // 503, not 404: the route exists and the member is authorised — the
     // release simply has not been published. A 404 would wrongly imply the
     // endpoint is missing.
-    return NextResponse.json(
-      {
-        ok: false,
-        error:
-          "No release build has been published yet. Place the signed APK at storage/apk/, or set NEXT_PUBLIC_APK_DOWNLOAD_URL to a CDN.",
-        code: "BUILD_UNAVAILABLE",
-      },
-      {
-        status: 503,
-        headers: {
-          "Cache-Control": "no-store",
-          "Retry-After": "3600",
-        },
-      },
+    return errorResponse(
+      "BUILD_UNAVAILABLE",
+      503,
+      "No release build has been published yet. Place the signed APK at storage/apk/, or set NEXT_PUBLIC_APK_DOWNLOAD_URL to a CDN.",
+      { headers: { "Retry-After": "3600" } },
     );
   }
 
@@ -163,9 +154,16 @@ export async function GET(request: NextRequest) {
 }
 
 /** Explicitly reject non-GET verbs so the gate cannot be probed sideways. */
-export async function POST() {
-  return NextResponse.json(
-    { ok: false, error: "Method not allowed", code: "VALIDATION_ERROR" },
-    { status: 405, headers: { Allow: "GET" } },
-  );
+async function handlePOST() {
+  // The code stays VALIDATION_ERROR rather than inventing METHOD_NOT_ALLOWED: the
+  // shipped APK already branches on what this endpoint has always answered.
+  return errorResponse("VALIDATION_ERROR", 405, "Method not allowed", {
+    headers: { Allow: "GET" },
+  });
 }
+
+// Each handler is wrapped: the domain mappers above own the expected failures, and
+// `guardRoute` catches anything else so the answer is still the JSON envelope.
+// Asserted for every route by tests/api-envelope.test.ts.
+export const GET = guardRoute("api/download", handleGET);
+export const POST = guardRoute("api/download", handlePOST);

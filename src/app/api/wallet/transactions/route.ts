@@ -1,5 +1,5 @@
 import type { NextRequest } from "next/server";
-import { apiJson } from "@/lib/http";
+import { guardRoute, apiJson } from "@/lib/http";
 import { requireMember } from "@/lib/member-auth";
 import { getTransactionHistory } from "@/lib/wallet";
 import { parseHistoryQuery, walletErrorResponse } from "@/lib/wallet-http";
@@ -17,7 +17,7 @@ export const dynamic = "force-dynamic";
  * A deposit appears here once an admin has approved the payment, so this is also
  * where a member confirms that a claim they filed actually landed as tokens.
  */
-export async function GET(request: NextRequest) {
+async function handleGET(request: NextRequest) {
   const guard = await requireMember();
   if (!guard.ok) return guard.response;
 
@@ -31,3 +31,8 @@ export async function GET(request: NextRequest) {
     return walletErrorResponse(error);
   }
 }
+
+// Each handler is wrapped: the domain mappers above own the expected failures, and
+// `guardRoute` catches anything else so the answer is still the JSON envelope.
+// Asserted for every route by tests/api-envelope.test.ts.
+export const GET = guardRoute("api/wallet/transactions", handleGET);

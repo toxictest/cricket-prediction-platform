@@ -5,6 +5,7 @@ import {
   revokeAdminSession,
   verifyAdminToken,
 } from "@/lib/admin-session";
+import { guardRoute } from "@/lib/http";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -16,7 +17,7 @@ export const dynamic = "force-dynamic";
  * succeeds, even with no cookie or an invalid one, so the response reveals
  * nothing about the session.
  */
-export async function POST() {
+async function handlePOST() {
   const jar = await cookies();
   const token = jar.get(adminCookieName())?.value;
 
@@ -29,3 +30,8 @@ export async function POST() {
     clearCookie: true,
   });
 }
+
+// Each handler is wrapped: the domain mappers above own the expected failures, and
+// `guardRoute` catches anything else so the answer is still the JSON envelope.
+// Asserted for every route by tests/api-envelope.test.ts.
+export const POST = guardRoute("api/admin/logout", handlePOST);

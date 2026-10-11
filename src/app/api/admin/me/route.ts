@@ -1,4 +1,5 @@
 import { adminJson, requireAdmin } from "@/lib/admin-guard";
+import { guardRoute } from "@/lib/http";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -7,7 +8,7 @@ export const dynamic = "force-dynamic";
  * GET /api/admin/me
  * Returns the signed-in admin with their roles. Any active admin may call it.
  */
-export async function GET() {
+async function handleGET() {
   const guard = await requireAdmin();
   if (!guard.ok) return guard.response;
 
@@ -30,3 +31,8 @@ export async function GET() {
     200,
   );
 }
+
+// Each handler is wrapped: the domain mappers above own the expected failures, and
+// `guardRoute` catches anything else so the answer is still the JSON envelope.
+// Asserted for every route by tests/api-envelope.test.ts.
+export const GET = guardRoute("api/admin/me", handleGET);

@@ -1,5 +1,18 @@
 import { Prisma, type PaymentStatus } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
+import {
+  MAX_REVIEW_NOTE_LENGTH,
+  MIN_REVIEW_NOTE_LENGTH,
+} from "@/lib/review-note";
+import {
+  externalUrlMessage,
+  inspectExternalUrl,
+} from "@/lib/external-url";
+import {
+  canonicalizeReference,
+  isWellFormedReference,
+  referenceShapeMessage,
+} from "@/lib/bank-reference";
 import { moneyModeEnabled, MONEY_MODE_OFF_MESSAGE } from "@/lib/feature-flags";
 import { creditDeposit, type LedgerEntry, type WalletBalances } from "@/lib/wallet";
 import {
@@ -64,16 +77,14 @@ export const MAX_PAYMENT_AMOUNT = 100_000;
 export const MAX_PENDING_PER_MEMBER = 5;
 
 /**
- * UTR lengths differ by rail: UPI references are 12 digits, IMPS and NEFT are
- * commonly 18 to 22, and some banks append letters. The check is therefore a
- * character-class and length test, not a per-rail format test — an invalid
- * reference is caught by a human comparing it against the statement.
+ * Length and character rules for a UTR live in `src/lib/bank-reference.ts`,
+ * which the payout reference an admin records uses too. Reuse matters more than
+ * it looks: a reference normalised one way on the way in and another way on the
+ * way out stops matching the bank statement you are reading.
  */
-export const MIN_UTR_LENGTH = 8;
-export const MAX_UTR_LENGTH = 32;
 
-export const MIN_REVIEW_NOTE_LENGTH = 3;
-export const MAX_REVIEW_NOTE_LENGTH = 500;
+/* Note bounds are shared with the payout queue (`src/lib/review-note.ts`) and
+   re-exported below, so both queues answer "why?" with the same rules. */
 
 const MAX_SCREENSHOT_URL_LENGTH = 2048;
 const MAX_ID_LENGTH = 64;
@@ -616,23 +627,17 @@ export function assertAmount(amount: number): number {
   return amount;
 }
 
-/** Trimmed and upper-cased, so " utr-123 " and "UTR-123" are the same reference. */
+/** Trimmed, inner whitespace collapsed and upper-cased, so " utr-12 " and
+ * "UTR-12" are the same reference. The length and character rules are shared
+ * with the payout reference, and the message keeps the field name the member
+ * used, so a 400 still points at the right input. */
 export function normalizeUtr(value: string): string {
   if (typeof value !== "string") {
     throw new PaymentError("VALIDATION_ERROR", "utrNumber must be a string");
   }
-  const normalized = value.trim().toUpperCase().replace(/\s+/g, "");
-  if (normalized.length < MIN_UTR_LENGTH || normalized.length > MAX_UTR_LENGTH) {
-    throw new PaymentError(
-      "VALIDATION_ERROR",
-      `utrNumber must be ${MIN_UTR_LENGTH} to ${MAX_UTR_LENGTH} characters after trimming`,
-    );
-  }
-  if (!/^[A-Z0-9-]+$/.test(normalized)) {
-    throw new PaymentError(
-      "VALIDATION_ERROR",
-      "utrNumber may contain only letters, digits and hyphens",
-    );
+  const normalized = canonicalizeReference(value);
+  if (!isWellFormedReference(normalized)) {
+    throw new PaymentError("VALIDATION_ERROR", referenceShapeMessage("utrNumber"));
   }
   return normalized;
 }
@@ -641,78 +646,26 @@ export function normalizeUtr(value: string): string {
  * Proof links are stored, then opened by an admin. Both ends matter: a
  * `javascript:` or `data:` value would run in the reviewer's browser, and a
  * link to a loopback or cloud-metadata address turns the queue into a proxy.
- * The screenshot itself is supposed to live in private storage behind a signed
- * URL; this function only refuses the shapes that are clearly wrong.
+ * The rules are shared with the match QR (src/lib/external-url.ts) — one list
+ * of shapes that must never be stored, kept in one place so the two fields
+ * cannot drift apart. This function only refuses the clearly wrong ones.
  */
 export function normalizeScreenshotUrl(value: string): string {
-  if (typeof value !== "string") {
-    throw new PaymentError("VALIDATION_ERROR", "screenshotUrl must be a string");
-  }
-
-  const trimmed = value.trim();
-  if (trimmed.length === 0 || trimmed.length > MAX_SCREENSHOT_URL_LENGTH) {
+  const result = inspectExternalUrl(value, MAX_SCREENSHOT_URL_LENGTH);
+  if (!result.ok) {
     throw new PaymentError(
       "VALIDATION_ERROR",
-      `screenshotUrl must be 1 to ${MAX_SCREENSHOT_URL_LENGTH} characters`,
+      externalUrlMessage(
+        "screenshotUrl",
+        result.problem,
+        MAX_SCREENSHOT_URL_LENGTH,
+        "screenshotUrl must point at your storage host, not an internal address",
+      ),
     );
   }
-
-  let url: URL;
-  try {
-    url = new URL(trimmed);
-  } catch {
-    throw new PaymentError("VALIDATION_ERROR", "screenshotUrl must be an absolute URL");
-  }
-
-  if (url.protocol !== "https:" && url.protocol !== "http:") {
-    throw new PaymentError("VALIDATION_ERROR", "screenshotUrl must be an http or https URL");
-  }
-  if (url.username || url.password) {
-    throw new PaymentError("VALIDATION_ERROR", "screenshotUrl must not carry credentials");
-  }
-  if (isBlockedHost(url.hostname)) {
-    throw new PaymentError(
-      "VALIDATION_ERROR",
-      "screenshotUrl must point at your storage host, not an internal address",
-    );
-  }
-
-  return url.toString();
+  return result.href;
 }
 
-function isBlockedHost(hostname: string): boolean {
-  const host = hostname.replace(/^\[|\]$/g, "").toLowerCase();
-
-  if (
-    host === "localhost" ||
-    host.endsWith(".localhost") ||
-    host === "metadata.google.internal" ||
-    host === "ec2instance-metadata" ||
-    host === "0.0.0.0" ||
-    host === "::" ||
-    host === "::1"
-  ) {
-    return true;
-  }
-
-  const octets = host.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
-  if (octets) {
-    const [a, b] = [Number(octets[1]), Number(octets[2])];
-    if (octets.some((part, i) => i > 0 && Number(part) > 255)) return true;
-    // 127/8 loopback, 10/8 and 172.16/12 private, 192.168/16 private,
-    // 169.254/16 link-local (cloud metadata), 100.64/10 service-provider NAT.
-    if (a === 127 || a === 10 || a === 0) return true;
-    if (a === 172 && b >= 16 && b <= 31) return true;
-    if (a === 192 && b === 168) return true;
-    if (a === 169 && b === 254) return true;
-    if (a === 100 && b >= 64 && b <= 127) return true;
-  }
-
-  // IPv6 loopback and unique-local ranges, after the bracket strip above.
-  if (host.startsWith("fe80:") || host.startsWith("fc") || host.startsWith("fd")) return true;
-
-  return false;
-}
 
 export function normalizeReviewNote(
   value: string | null | undefined,
@@ -777,3 +730,5 @@ function isUtrConflict(error: unknown): boolean {
 
 /** Re-exported so the payment routes and the admin UI share one page-size rule. */
 export { DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE };
+/** Re-exported for the same reason: one set of note bounds across both queues. */
+export { MIN_REVIEW_NOTE_LENGTH, MAX_REVIEW_NOTE_LENGTH };

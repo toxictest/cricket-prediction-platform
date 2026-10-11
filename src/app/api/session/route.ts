@@ -1,5 +1,5 @@
-import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
+import { guardRoute, apiSuccess, notFoundResponse, unauthorizedResponse } from "@/lib/http";
 import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 
@@ -14,14 +14,11 @@ export const dynamic = "force-dynamic";
  * live referral count and download history. Useful for the Android client and
  * for client components that need to poll membership state.
  */
-export async function GET() {
+async function handleGET() {
   const session = await getServerSession(authOptions);
 
   if (!session?.user?.id) {
-    return NextResponse.json(
-      { ok: false, error: "Not authenticated", code: "UNAUTHORIZED" },
-      { status: 401, headers: { "Cache-Control": "no-store" } },
-    );
+    return unauthorizedResponse();
   }
 
   const user = await prisma.user.findUnique({
@@ -39,23 +36,19 @@ export async function GET() {
   });
 
   if (!user) {
-    return NextResponse.json(
-      { ok: false, error: "Account no longer exists", code: "NOT_FOUND" },
-      { status: 404, headers: { "Cache-Control": "no-store" } },
-    );
+    return notFoundResponse("Account no longer exists");
   }
 
   const { _count, ...rest } = user;
 
-  return NextResponse.json(
-    {
-      ok: true,
-      data: {
-        user: rest,
-        referralCount: _count.referrals,
-        downloadCount: _count.downloadLogs,
-      },
-    },
-    { status: 200, headers: { "Cache-Control": "no-store" } },
-  );
+  return apiSuccess({
+    user: rest,
+    referralCount: _count.referrals,
+    downloadCount: _count.downloadLogs,
+  });
 }
+
+// Each handler is wrapped: the domain mappers above own the expected failures, and
+// `guardRoute` catches anything else so the answer is still the JSON envelope.
+// Asserted for every route by tests/api-envelope.test.ts.
+export const GET = guardRoute("api/session", handleGET);

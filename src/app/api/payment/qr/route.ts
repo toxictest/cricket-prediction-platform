@@ -1,4 +1,4 @@
-import { apiJson } from "@/lib/http";
+import { guardRoute, apiJson } from "@/lib/http";
 import { requireMember } from "@/lib/member-auth";
 import { getActivePaymentQr } from "@/lib/payment";
 import { paymentErrorResponse } from "@/lib/payment-http";
@@ -20,7 +20,7 @@ export const dynamic = "force-dynamic";
  * `no-store` matters: an admin can swap the QR between matches, and a cached
  * image would send money to the wrong account.
  */
-export async function GET() {
+async function handleGET() {
   const guard = await requireMember();
   if (!guard.ok) return guard.response;
 
@@ -31,3 +31,8 @@ export async function GET() {
     return paymentErrorResponse(error);
   }
 }
+
+// Each handler is wrapped: the domain mappers above own the expected failures, and
+// `guardRoute` catches anything else so the answer is still the JSON envelope.
+// Asserted for every route by tests/api-envelope.test.ts.
+export const GET = guardRoute("api/payment/qr", handleGET);

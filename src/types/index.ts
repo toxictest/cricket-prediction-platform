@@ -45,25 +45,48 @@ export type ApiSuccess<T> = {
   data: T;
 };
 
+/**
+ * The response vocabulary for every route in this app, and nothing else.
+ *
+ * Grouped by who raises it. Transport and auth codes live here in full, because
+ * they are shared. A domain is free to widen the type with its own codes —
+ * `PaymentApiError` in `src/lib/payment-http.ts` is `PaymentErrorCode |
+ * WalletErrorCode | ApiError["code"]` — and the mapper there annotates its body
+ * `satisfies PaymentApiError`, so a new domain code cannot appear on the wire
+ * without appearing in that domain's union. Widening is deliberate: making every
+ * domain code a member of this union instead would let `NOT_FOUND` from one
+ * service satisfy a caller that means `MATCH_NOT_FOUND` from another.
+ *
+ * Codes a client may branch on are therefore: these, plus the four `*ErrorCode`
+ * unions in `src/lib/{wallet,payment,withdrawal,match}.ts`. `admin-guard` uses
+ * `AdminApiError`, which is this type with the staff-auth codes added.
+ */
 export type ApiError = {
   ok: false;
+  /** Human sentence. Safe to show a member or an operator verbatim. */
   error: string;
-  /** Machine-readable code so the client can branch without string matching. */
   code:
-    | "UNAUTHORIZED"
-    | "FORBIDDEN"
-    | "NOT_FOUND"
+    /* ---- transport: the request itself was unusable ---- */
     | "VALIDATION_ERROR"
-    | "RATE_LIMITED"
-    | "INTERNAL_ERROR"
-    /** Body was not `application/json`. Blocks forced form posts. */
-    | "UNSUPPORTED_MEDIA_TYPE"
     /** Body was present but not parseable JSON. */
     | "INVALID_JSON"
+    /** Body was not `application/json`. Blocks forced form posts. */
+    | "UNSUPPORTED_MEDIA_TYPE"
+    /* ---- auth: who are you ---- */
+    | "UNAUTHORIZED"
+    | "NOT_FOUND"
+    | "FORBIDDEN"
+    /* ---- capacity: come back later ---- */
+    | "RATE_LIMITED"
+    /* ---- server: nothing the client did was wrong ---- */
+    | "INTERNAL_ERROR"
+    /** The staged APK is missing or too small to be a real build. */
+    | "BUILD_UNAVAILABLE"
     /** The endpoint exists, but `MONEY_MODE` keeps it closed. */
     | "PAYMENTS_DISABLED"
     /** No live or upcoming match has a payment QR configured. */
     | "NO_ACTIVE_QR";
+  /** Field details for a form (Zod's `flatten()` shape), or a small machine hint. */
   details?: unknown;
 };
 

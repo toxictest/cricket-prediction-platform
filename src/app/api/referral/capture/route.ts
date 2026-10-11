@@ -1,5 +1,6 @@
-import { NextResponse, type NextRequest } from "next/server";
+import type { NextRequest } from "next/server";
 import { z } from "zod";
+import { guardRoute, apiSuccess, errorResponse } from "@/lib/http";
 import { validateReferralCode } from "@/lib/referral";
 
 export const runtime = "nodejs";
@@ -22,57 +23,37 @@ const bodySchema = z.object({
  * The code is validated *before* being stored, so a garbage value can never
  * reach the database layer — and the cookie stays unset if it is invalid.
  */
-export async function POST(request: NextRequest) {
+async function handlePOST(request: NextRequest) {
   let payload: unknown;
 
   try {
     payload = await request.json();
   } catch {
-    return NextResponse.json(
-      { ok: false, error: "Malformed JSON body", code: "VALIDATION_ERROR" },
-      { status: 400 },
-    );
+    return errorResponse("VALIDATION_ERROR", 400, "Malformed JSON body");
   }
 
   const parsed = bodySchema.safeParse(payload);
 
   if (!parsed.success) {
-    return NextResponse.json(
-      {
-        ok: false,
-        error: "Referral codes are 4–24 characters.",
-        code: "VALIDATION_ERROR",
-      },
-      { status: 400 },
-    );
+    return errorResponse("VALIDATION_ERROR", 400, "Referral codes are 4–24 characters.");
   }
 
   const result = await validateReferralCode(parsed.data.code);
 
   if (!result.valid) {
-    return NextResponse.json(
-      {
-        ok: false,
-        error:
-          result.reason === "malformed"
-            ? "That referral code is not formatted correctly."
-            : "No member is using that referral code.",
-        code: result.reason === "malformed" ? "VALIDATION_ERROR" : "NOT_FOUND",
-      },
-      { status: result.reason === "malformed" ? 400 : 404 },
+    return errorResponse(
+      result.reason === "malformed" ? "VALIDATION_ERROR" : "NOT_FOUND",
+      result.reason === "malformed" ? 400 : 404,
+      result.reason === "malformed"
+        ? "That referral code is not formatted correctly."
+        : "No member is using that referral code.",
     );
   }
 
-  const response = NextResponse.json(
-    {
-      ok: true,
-      data: {
-        code: result.code,
-        referrerFirstName: result.referrerName.split(/\s+/)[0] ?? "A member",
-      },
-    },
-    { status: 200, headers: { "Cache-Control": "no-store" } },
-  );
+  const response = apiSuccess({
+    code: result.code,
+    referrerFirstName: result.referrerName.split(/\s+/)[0] ?? "A member",
+  });
 
   response.cookies.set({
     name: REFERRAL_COOKIE,
@@ -88,11 +69,8 @@ export async function POST(request: NextRequest) {
 }
 
 /** DELETE /api/referral/capture — lets the user un-apply a code. */
-export async function DELETE() {
-  const response = NextResponse.json(
-    { ok: true, data: { cleared: true } },
-    { status: 200, headers: { "Cache-Control": "no-store" } },
-  );
+async function handleDELETE() {
+  const response = apiSuccess({ cleared: true });
   response.cookies.set({
     name: REFERRAL_COOKIE,
     value: "",
@@ -104,3 +82,9 @@ export async function DELETE() {
   });
   return response;
 }
+
+// Each handler is wrapped: the domain mappers above own the expected failures, and
+// `guardRoute` catches anything else so the answer is still the JSON envelope.
+// Asserted for every route by tests/api-envelope.test.ts.
+export const POST = guardRoute("api/referral/capture", handlePOST);
+export const DELETE = guardRoute("api/referral/capture", handleDELETE);

@@ -61,7 +61,8 @@ export type WalletErrorCode =
   | "PAYMENT_MISMATCH"
   | "MINIMUM_BALANCE"
   | "BALANCE_LIMIT"
-  | "DUPLICATE_REFERENCE";
+  | "DUPLICATE_REFERENCE"
+  | "REFUND_NOT_MATCHED";
 
 const HTTP_STATUS_BY_CODE: Record<WalletErrorCode, number> = {
   VALIDATION_ERROR: 400,
@@ -72,6 +73,7 @@ const HTTP_STATUS_BY_CODE: Record<WalletErrorCode, number> = {
   MINIMUM_BALANCE: 422,
   BALANCE_LIMIT: 422,
   DUPLICATE_REFERENCE: 409,
+  REFUND_NOT_MATCHED: 422,
 };
 
 /** Expected business or validation failure. Routes map it to an HTTP response. */
@@ -327,6 +329,63 @@ export async function debitWinning(
   });
 }
 
+/**
+ * Returns tokens that `debitWinning` took, because the payout was refused.
+ *
+ * Two rules make a refund safe to expose to a reviewer:
+ *
+ *   1. There must be a WITHDRAWAL ledger row for the same reference. The
+ *      platform gives back what it cut, so a refund can never mint tokens out
+ *      of nothing, whatever the caller's `WithdrawalRequest` row claims.
+ *   2. The amount must equal that debit exactly. A partial refund would leave
+ *      the remainder cut with nothing to show for it, which is a support case,
+ *      not a ledger write.
+ *
+ * The unique `(user, type, reference)` index means the same withdrawal can
+ * also only ever be refunded once, and the credit lands in `winningBalance`,
+ * never in the deposit balance.
+ */
+export async function refundWinning(
+  userId: string,
+  amount: number,
+  referenceId: string,
+  description?: string | null,
+  options: WalletWriteOptions = {},
+): Promise<WalletMutationResult> {
+  const tokens = assertAmount(amount);
+  const reference = parseReferenceId(referenceId);
+  const note = normalizeDescription(description);
+
+  return withWallet(userId, options, async (tx, wallet) => {
+    await assertNotApplied(tx, userId, "REFUND", reference);
+
+    const debit = await tx.transaction.findFirst({
+      where: { userId, type: "WITHDRAWAL", referenceId: reference },
+      select: { amount: true },
+    });
+    if (!debit) {
+      throw new WalletError(
+        "REFUND_NOT_MATCHED",
+        "No withdrawal debit exists for this reference, so nothing can be returned",
+      );
+    }
+    if (-debit.amount !== tokens) {
+      throw new WalletError(
+        "REFUND_NOT_MATCHED",
+        `That withdrawal cut ${-debit.amount} tokens, so only ${-debit.amount} can be returned`,
+      );
+    }
+
+    return applyMovement(tx, wallet, {
+      type: "REFUND",
+      balanceType: "WINNING",
+      delta: tokens,
+      referenceId: reference,
+      description: note,
+    });
+  });
+}
+
 /* ==========================================================================
    INTERNALS
    ========================================================================== */
@@ -376,6 +435,34 @@ async function applyMovement(
 ): Promise<WalletMutationResult> {
   const current =
     movement.balanceType === "DEPOSIT" ? wallet.depositBalance : wallet.winningBalance;
+
+  /*
+   * The two balance rules, enforced at the one place every movement passes
+   * through, not only in the caller that remembers them:
+   *
+   *   • the retained minimum — at least MIN_RETAINED_WINNING_TOKENS must stay in
+   *     the winning balance after any debit (`debitWinning` checks this too, and
+   *     gets the identical error, so nothing changes for it);
+   *   • deposits are never debited. An approved deposit is already spent or banked
+   *     on the member's side, and a reversal path is an open design decision
+   *     (docs/SYSTEM_DESIGN.md §5.5), not something to improvise at the ledger.
+   *
+   * Putting them here is what makes "enforced everywhere" true for the next
+   * caller — a prediction stake, an admin correction — rather than only for the
+   * two that exist today.
+   */
+  if (movement.delta < 0) {
+    if (movement.balanceType === "DEPOSIT") {
+      throw new WalletError(
+        "VALIDATION_ERROR",
+        "A deposit balance is never debited. Refunds of winnings go through the winning balance.",
+      );
+    }
+    if (current + movement.delta < MIN_RETAINED_WINNING_TOKENS) {
+      throw new WalletError("MINIMUM_BALANCE", minimumBalanceMessage());
+    }
+  }
+
   if (current + movement.delta > MAX_BALANCE) {
     throw new WalletError(
       "BALANCE_LIMIT",

@@ -2,10 +2,10 @@
    KEYSET PAGING PRIMITIVES
    ==========================================================================
 
-   Used by every list endpoint in the money area (wallet ledger, payment
-   queue). Offset paging is deliberately not offered: a page number shifts rows
+   Used by every list endpoint in the money area (wallet ledger, payment and
+   payout queues) and by the match lists. Offset paging is deliberately not offered: a page number shifts rows
    when a new row arrives, so a reviewer can see the same claim twice or skip
-   one. Keyset paging compares on `(createdAt, id)`, which never moves.
+   one. Keyset paging compares on `(<sort column>, id)`, which never moves.
 
    A cursor is `base64url("<ISO createdAt>|<id>")`. Clients treat it as opaque.
 
@@ -19,6 +19,17 @@ export const MAX_PAGE_SIZE = 100;
 /** Highest id length accepted inside a cursor. cuid ids are 25 characters. */
 const MAX_CURSOR_ID_LENGTH = 64;
 
+/**
+ * Where a page ended. `at` is whatever the list is ordered by — a ledger row's
+ * `createdAt`, a fixture's `startTime` — and `id` breaks a tie, because two rows
+ * can share a timestamp to the millisecond and a cursor must not straddle them.
+ */
+export type SortPosition = {
+  at: Date;
+  id: string;
+};
+
+/** @deprecated Kept for the wallet and queue services; `SortPosition` is the general name. */
 export type CursorPosition = {
   createdAt: Date;
   id: string;
@@ -33,31 +44,36 @@ export function resolveLimit(
   return limit;
 }
 
+export function encodeSortCursor(at: Date, id: string): string {
+  return Buffer.from(`${at.toISOString()}|${id}`, "utf8").toString("base64url");
+}
+
+/** Alias of `encodeSortCursor` for lists ordered by `createdAt`. */
 export function encodeCursor(createdAt: Date, id: string): string {
-  return Buffer.from(`${createdAt.toISOString()}|${id}`, "utf8").toString(
-    "base64url",
-  );
+  return encodeSortCursor(createdAt, id);
 }
 
 /** `null` when the cursor is malformed or points at nothing usable. */
-export function decodeCursor(cursor: string): CursorPosition | null {
+export function decodeSortCursor(cursor: string): SortPosition | null {
   const raw = safeDecode(cursor);
   if (raw === null) return null;
 
   const separator = raw.indexOf("|");
   if (separator <= 0) return null;
 
-  const createdAt = new Date(raw.slice(0, separator));
+  const at = new Date(raw.slice(0, separator));
   const id = raw.slice(separator + 1);
-  if (
-    Number.isNaN(createdAt.getTime()) ||
-    id.length === 0 ||
-    id.length > MAX_CURSOR_ID_LENGTH
-  ) {
+  if (Number.isNaN(at.getTime()) || id.length === 0 || id.length > MAX_CURSOR_ID_LENGTH) {
     return null;
   }
 
-  return { createdAt, id };
+  return { at, id };
+}
+
+/** Alias of `decodeSortCursor` shaped for the lists that page on `createdAt`. */
+export function decodeCursor(cursor: string): CursorPosition | null {
+  const position = decodeSortCursor(cursor);
+  return position ? { createdAt: position.at, id: position.id } : null;
 }
 
 /**

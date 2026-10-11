@@ -1,7 +1,7 @@
 import type { NextRequest } from "next/server";
 import type { Role } from "@prisma/client";
 import { adminJson, requireAdmin } from "@/lib/admin-guard";
-import { readJsonBody } from "@/lib/http";
+import { guardRoute, readJsonBody } from "@/lib/http";
 import { rejectPaymentRequest } from "@/lib/payment";
 import { parseRejectBody, paymentErrorResponse } from "@/lib/payment-http";
 
@@ -27,7 +27,7 @@ const PAYMENT_REVIEW_ROLES: Role[] = ["SUPER_ADMIN", "PAYMENT_ADMIN"];
  *   415 body is not application/json
  *   503 money features switched off
  */
-export async function POST(
+async function handlePOST(
   request: NextRequest,
   context: { params: Promise<{ id: string }> },
 ) {
@@ -49,3 +49,8 @@ export async function POST(
     return paymentErrorResponse(error);
   }
 }
+
+// Each handler is wrapped: the domain mappers above own the expected failures, and
+// `guardRoute` catches anything else so the answer is still the JSON envelope.
+// Asserted for every route by tests/api-envelope.test.ts.
+export const POST = guardRoute("api/admin/payments/[id]/reject", handlePOST);

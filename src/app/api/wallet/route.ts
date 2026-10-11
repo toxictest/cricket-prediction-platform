@@ -1,4 +1,4 @@
-import { apiJson } from "@/lib/http";
+import { guardRoute, apiJson } from "@/lib/http";
 import { requireMember } from "@/lib/member-auth";
 import { getWallet } from "@/lib/wallet";
 import { walletErrorResponse } from "@/lib/wallet-http";
@@ -16,7 +16,7 @@ export const dynamic = "force-dynamic";
  *  - withdrawableBalance: how much of winningBalance can be withdrawn now.
  *    MIN_RETAINED_WINNING_TOKENS always stays in the wallet.
  */
-export async function GET() {
+async function handleGET() {
   const guard = await requireMember();
   if (!guard.ok) return guard.response;
 
@@ -27,3 +27,8 @@ export async function GET() {
     return walletErrorResponse(error);
   }
 }
+
+// Each handler is wrapped: the domain mappers above own the expected failures, and
+// `guardRoute` catches anything else so the answer is still the JSON envelope.
+// Asserted for every route by tests/api-envelope.test.ts.
+export const GET = guardRoute("api/wallet", handleGET);
